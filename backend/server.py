@@ -4,13 +4,17 @@ from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
+import asyncio
 from pathlib import Path
 from datetime import datetime, timezone
+from pydantic import BaseModel
+from typing import Optional
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from contextlib import contextmanager
 
 from migration import MIGRATION_SQL, ODOO_TABLES, ODOO_VIEWS
+from scheduler import SyncScheduler
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -31,6 +35,8 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+scheduler = SyncScheduler()
 
 
 @contextmanager
@@ -58,7 +64,7 @@ def run_migration():
             return {"success": False, "message": str(e)}
 
 
-# Auto-migrate on startup
+# Auto-migrate on startup + start scheduler
 @app.on_event("startup")
 async def startup_event():
     try:
@@ -69,6 +75,8 @@ async def startup_event():
             logger.warning(f"Auto-migration on startup failed: {result['message']}")
     except Exception as e:
         logger.warning(f"Auto-migration on startup error: {e}")
+    # Start scheduler
+    scheduler.start()
 
 
 @api_router.get("/")
