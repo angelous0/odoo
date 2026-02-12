@@ -1,0 +1,155 @@
+{
+  "design_system": {
+    "identity": {
+      "name": "Odoo-Postgres SyncHub",
+      "tone": "Technical, Robust, Authoritative, High-Contrast",
+      "archetype": "The Performance Pro (Database Edition)",
+      "language": "es"
+    },
+    "typography": {
+      "font_family": {
+        "headings": "JetBrains Mono, monospace",
+        "body": "Manrope, sans-serif",
+        "code": "JetBrains Mono, monospace"
+      },
+      "scale": {
+        "h1": "text-3xl md:text-4xl font-bold tracking-tight",
+        "h2": "text-2xl font-semibold tracking-tight",
+        "h3": "text-xl font-medium",
+        "p": "text-sm text-muted-foreground leading-relaxed",
+        "small": "text-xs font-medium uppercase tracking-wider text-muted-foreground"
+      }
+    },
+    "colors": {
+      "theme": "dark",
+      "palette": {
+        "background": "#0A0A0A",
+        "foreground": "#FAFAFA",
+        "card": "#121212",
+        "card_foreground": "#FAFAFA",
+        "popover": "#121212",
+        "popover_foreground": "#FAFAFA",
+        "primary": "#10B981",
+        "primary_foreground": "#000000",
+        "secondary": "#27272A",
+        "secondary_foreground": "#FAFAFA",
+        "muted": "#27272A",
+        "muted_foreground": "#A1A1AA",
+        "accent": "#27272A",
+        "accent_foreground": "#FAFAFA",
+        "destructive": "#EF4444",
+        "destructive_foreground": "#FAFAFA",
+        "border": "#27272A",
+        "input": "#27272A",
+        "ring": "#10B981"
+      },
+      "status": {
+        "success": "#10B981",
+        "warning": "#F59E0B",
+        "error": "#EF4444",
+        "info": "#3B82F6",
+        "running": "#8B5CF6"
+      }
+    },
+    "layout": {
+      "spacing": "Generous (2x standard). Use p-6, p-8, gap-6.",
+      "container": "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8",
+      "grid_strategy": "Bento Grid Mode B (High Density)",
+      "modes": {
+        "dashboard": "grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-6",
+        "detail": "grid grid-cols-1 md:grid-cols-3 gap-8"
+      }
+    },
+    "components": {
+      "buttons": {
+        "primary": "bg-primary text-primary-foreground hover:bg-primary/90 shadow-[0_0_15px_rgba(16,185,129,0.3)] rounded-md font-medium transition-all active:scale-95",
+        "secondary": "bg-secondary text-secondary-foreground hover:bg-secondary/80 rounded-md font-medium transition-all active:scale-95",
+        "destructive": "bg-destructive text-destructive-foreground hover:bg-destructive/90 rounded-md font-medium transition-all active:scale-95",
+        "ghost": "hover:bg-accent hover:text-accent-foreground rounded-md transition-all"
+      },
+      "cards": {
+        "base": "bg-card border border-border rounded-lg shadow-sm hover:shadow-md transition-shadow",
+        "metric": "p-6 flex flex-col justify-between h-full bg-gradient-to-br from-card to-card/50"
+      },
+      "tables": {
+        "style": "w-full text-sm",
+        "header": "h-12 px-4 text-left align-middle font-medium text-muted-foreground [&:has([role=checkbox])]:pr-0",
+        "row": "border-b border-border transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted",
+        "cell": "p-4 align-middle [&:has([role=checkbox])]:pr-0 font-mono text-xs md:text-sm"
+      },
+      "logs": {
+        "container": "bg-[#050505] border border-border rounded-lg p-4 font-mono text-xs overflow-y-auto max-h-[500px] text-green-400/90 shadow-inner"
+      }
+    },
+    "visual_enhancers": {
+      "borders": "1px solid #27272A",
+      "shadows": "shadow-lg shadow-black/40",
+      "gradients": "None generally. Subtle radial gradient top-center for depth: radial-gradient(circle at top, rgba(16, 185, 129, 0.05), transparent 40%)",
+      "motion": "Fast, precise. Duration 150ms-200ms. Ease-out."
+    }
+  },
+  "pages": {
+    "dashboard": {
+      "name": "Panel de Control de Migración",
+      "route": "/",
+      "structure": [
+        {
+          "section": "Header",
+          "elements": ["Logo (Text)", "Theme Toggle (Hidden/Fixed Dark)", "Connection Status Indicator"]
+        },
+        {
+          "section": "Hero / Actions",
+          "elements": ["Main 'Ejecutar Migración' (Execute Migration) Button - Large, Prominent", "Last Run Status Summary"]
+        },
+        {
+          "section": "Metrics Grid",
+          "elements": ["Total Tables (Count)", "Synced Rows (Count)", "Last Sync Time", "Error Count"]
+        },
+        {
+          "section": "Sync Jobs (Trabajos de Sincronización)",
+          "elements": ["List of jobs (odoo_sync_job table)", "Status Badges", "Individual Run Actions"]
+        },
+        {
+          "section": "Tables Overview (Resumen de Tablas)",
+          "elements": ["Data Table of synced tables (odoo.res_partner, etc.)", "Row Counts", "Last Updated"]
+        }
+      ]
+    },
+    "logs": {
+      "name": "Historial de Ejecución",
+      "route": "/logs",
+      "structure": [
+        {
+          "section": "Log Viewer",
+          "elements": ["Terminal-like view of sync_run_log", "Filter by Date/Status"]
+        }
+      ]
+    }
+  },
+  "instructions_to_main_agent": [
+    "1. LANGUAGE: The entire UI MUST be in SPANISH (Español). Labels, Buttons, Messages, Tooltips.",
+    "2. THEME: Enforce DARK MODE. Set class='dark' on the html/body tag by default.",
+    "3. CLEANUP: Delete or clear /app/frontend/src/App.css to remove default centering styles. Use Tailwind classes for layout.",
+    "4. COMPONENTS: Use existing shadcn components in /app/frontend/src/components/ui. Do not reinvent the button or card.",
+    "5. FONTS: Add '@import url(\"https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Manrope:wght@400;500;600;700&display=swap\");' to index.css.",
+    "6. ICONS: Use 'lucide-react' (default) or '@heroicons/react' for UI icons (Database, Play, RotateCcw, AlertTriangle, CheckCircle).",
+    "7. NOTIFICATIONS: Use 'sonner' for toast notifications on migration start/success/fail.",
+    "8. ACCESSIBILITY: Ensure all buttons have aria-labels and high contrast.",
+    "9. TESTING: Add 'data-testid' to all interactive elements (buttons, inputs, rows).",
+    "10. LAYOUT: Do not center the entire app. Use a top-nav + container layout."
+  ],
+  "universal_guidelines": [
+    "Dark colors look good when used independently without gradients. DO NOT use dark colors as gradients",
+    "Don't make generic centered layouts, simplistic gradients, and uniform styling.",
+    "Create depth through layered design elements with z-index hierarchy",
+    "Use glass-morphism effects with backdrop filters (12-24px blur)",
+    "You MUST NOT apply universal transition. Eg: transition: all. This results in breaking transforms. Always add transitions for specific interactive elements like button, input excluding transforms",
+    "You MUST NOT center align the app container, ie do not add .App { text-align: center; } in the css file. This disrupts the human natural reading flow of text",
+    "Always use modern button styles like pill-shaped, or sharp button with interaction animations & color relevant to the app style",
+    "NEVER: use AI assistant Emoji characters like 🤖🧠 etc for icons.",
+    "Every interaction needs micro-animations - hover states, transitions.",
+    "Use 2-3x more spacing than feels comfortable. Cramped designs look cheap.",
+    "Components MUST use named exports (export const ComponentName = ...)",
+    "Pages MUST use default exports (export default function PageName() {...})"
+  ]
+}
