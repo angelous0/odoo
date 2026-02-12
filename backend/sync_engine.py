@@ -1,6 +1,7 @@
 """
 Odoo -> PostgreSQL Sync Engine.
 Handles incremental sync for masters (GLOBAL) and POS (per company).
+Uses batch upserts for performance.
 """
 import os
 import logging
@@ -13,12 +14,11 @@ logger = logging.getLogger(__name__)
 
 MASTER_JOBS = ['RES_COMPANY', 'RES_USERS', 'RES_PARTNER', 'PRODUCTS', 'ATTRIBUTES']
 POS_JOBS = ['POS_ORDERS']
-
 ADVISORY_LOCK_ID = 777777
 
 
-def extract_id(val):
-    """Extract integer id from Odoo many2one field ([id, name] or int or False)."""
+def xid(val):
+    """Extract integer id from Odoo many2one field ([id,name] or int or False)."""
     if val is False or val is None:
         return None
     if isinstance(val, (list, tuple)) and len(val) >= 1:
@@ -30,7 +30,7 @@ def extract_id(val):
     return None
 
 
-def extract_date(val):
+def xdt(val):
     """Parse Odoo date string to Python datetime or None."""
     if not val or val is False:
         return None
@@ -43,21 +43,14 @@ def extract_date(val):
     return None
 
 
-def extract_bool(val):
-    """Extract boolean, treating Odoo False as Python False/None."""
-    if val is False or val is None:
-        return False
-    return bool(val)
-
-
-def extract_text(val):
+def xtxt(val):
     """Extract text, treating Odoo False as None."""
     if val is False or val is None:
         return None
     return str(val)
 
 
-def extract_numeric(val):
+def xnum(val):
     """Extract numeric value."""
     if val is False or val is None:
         return None
@@ -67,14 +60,28 @@ def extract_numeric(val):
         return None
 
 
+def xbool(val):
+    """Extract boolean, but return None if val is literally False (unset)."""
+    if val is None:
+        return None
+    if val is False:
+        return False
+    return bool(val)
+
+
+def xbool_nullable(val):
+    """For optional boolean fields: None if not set."""
+    if val is False or val is None:
+        return None
+    return bool(val)
+
+
 class SyncService:
     def __init__(self):
         self.pg_url = os.environ['PG_URL']
         self.odoo_url = os.environ['ODOO_URL']
         self.odoo_db = os.environ['ODOO_DB']
         self.client = OdooClient(self.odoo_url)
-
-        # Credentials per company
         self.credentials = {
             'Ambission': {
                 'login': os.environ['ODOO_AMBISSION_LOGIN'],
@@ -85,152 +92,163 @@ class SyncService:
                 'password': os.environ['ODOO_PROYECTOMODA_PASSWORD'],
             },
         }
-        # Cache for authenticated uids and company contexts
         self._uid_cache = {}
-        self._company_context_cache = {}
+        self._ctx_cache = {}
 
-    def _get_pg_conn(self):
+    def _conn(self):
         return psycopg2.connect(self.pg_url)
 
-    def _auth(self, company_key):
-        """Authenticate for a given company key and return (uid, password)."""
-        if company_key in self._uid_cache:
-            return self._uid_cache[company_key]
-        creds = self.credentials.get(company_key, self.credentials['Ambission'])
+    def _auth(self, ck):
+        if ck in self._uid_cache:
+            return self._uid_cache[ck]
+        creds = self.credentials.get(ck, self.credentials['Ambission'])
         uid = self.client.authenticate(self.odoo_db, creds['login'], creds['password'])
-        self._uid_cache[company_key] = (uid, creds['password'])
+        self._uid_cache[ck] = (uid, creds['password'])
         return uid, creds['password']
 
-    def _get_company_context(self, company_key):
-        """Get company context for POS calls."""
-        if company_key in self._company_context_cache:
-            return self._company_context_cache[company_key]
-        uid, password = self._auth(company_key)
+    def _company_ctx(self, ck):
+        if ck in self._ctx_cache:
+            return self._ctx_cache[ck]
+        uid, pw = self._auth(ck)
         try:
-            user_data = self.client.read(
-                self.odoo_db, uid, password, 'res.users', [uid],
-                ['company_id', 'company_ids']
-            )
-            if user_data:
-                company_id = extract_id(user_data[0].get('company_id'))
-                company_ids = user_data[0].get('company_ids', [])
-                if not company_ids:
-                    company_ids = [company_id] if company_id else []
-                ctx = {
-                    'allowed_company_ids': company_ids,
-                    'company_id': company_id,
-                }
-                self._company_context_cache[company_key] = (ctx, company_id)
-                logger.info(f"Company context for {company_key}: company_id={company_id}, ids={company_ids}")
-                return ctx, company_id
+            udata = self.client.read(self.odoo_db, uid, pw, 'res.users', [uid], ['company_id', 'company_ids'])
+            if udata:
+                cid = xid(udata[0].get('company_id'))
+                cids = udata[0].get('company_ids', []) or ([cid] if cid else [])
+                ctx = {'allowed_company_ids': cids, 'company_id': cid}
+                self._ctx_cache[ck] = (ctx, cid)
+                return ctx, cid
         except Exception as e:
-            logger.warning(f"Could not get company context for {company_key}: {e}")
-        ctx = {}
-        self._company_context_cache[company_key] = (ctx, None)
-        return ctx, None
+            logger.warning(f"Company context for {ck}: {e}")
+        self._ctx_cache[ck] = ({}, None)
+        return {}, None
 
-    def _insert_log(self, conn, job_code, company_key):
-        """Insert a sync_run_log entry and return its id."""
-        with conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO odoo.sync_run_log (job_code, company_key, started_at, status)
-                VALUES (%s, %s, now(), 'RUNNING')
-                RETURNING id
-            """, (job_code, company_key))
-            log_id = cur.fetchone()[0]
-        return log_id
+    def _paginate(self, uid, pw, model, domain, fields, chunk, ctx=None):
+        all_recs = []
+        offset = 0
+        while True:
+            batch = self.client.search_read(self.odoo_db, uid, pw, model, domain, fields,
+                                            limit=chunk, offset=offset, context=ctx)
+            if not batch:
+                break
+            all_recs.extend(batch)
+            offset += chunk
+            if len(batch) < chunk:
+                break
+        logger.info(f"  Fetched {len(all_recs)} from {model}")
+        return all_recs
 
-    def _finish_log(self, conn, log_id, status, rows_upserted=0, rows_updated=0, error_message=None):
-        """Update sync_run_log with final status."""
-        with conn.cursor() as cur:
-            cur.execute("""
-                UPDATE odoo.sync_run_log
-                SET ended_at = now(), status = %s, rows_upserted = %s, rows_updated = %s, error_message = %s
-                WHERE id = %s
-            """, (status, rows_upserted, rows_updated, error_message, log_id))
+    def _inc_domain(self, base, cursor, mode):
+        d = list(base)
+        if mode == 'INCREMENTAL' and cursor:
+            d.append(('write_date', '>', cursor.strftime('%Y-%m-%d %H:%M:%S')))
+        return d
 
-    def _update_job_cursor(self, conn, job_code, last_cursor, success=True, error=None):
-        """Update sync_job after a run."""
-        with conn.cursor() as cur:
-            if success:
-                cur.execute("""
-                    UPDATE odoo.sync_job
-                    SET last_run_at = now(), last_success_at = now(), last_cursor = %s, last_error = NULL
-                    WHERE job_code = %s
-                """, (last_cursor, job_code))
-            else:
-                cur.execute("""
-                    UPDATE odoo.sync_job
-                    SET last_run_at = now(), last_error = %s
-                    WHERE job_code = %s
-                """, (str(error)[:500] if error else None, job_code))
+    # ---- DB helpers (use dedicated short connections for metadata) ----
 
-    def _get_job_cursor(self, conn, job_code):
-        """Get last_cursor for a job."""
-        with conn.cursor() as cur:
-            cur.execute("SELECT last_cursor FROM odoo.sync_job WHERE job_code = %s", (job_code,))
-            row = cur.fetchone()
-            return row[0] if row else None
+    def _insert_log(self, job_code, company_key):
+        conn = self._conn()
+        conn.autocommit = True
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""INSERT INTO odoo.sync_run_log (job_code,company_key,started_at,status)
+                               VALUES (%s,%s,now(),'RUNNING') RETURNING id""", (job_code, company_key))
+                return cur.fetchone()[0]
+        finally:
+            conn.close()
 
-    def _build_incremental_domain(self, base_domain, last_cursor, mode):
-        """Add write_date filter for incremental mode."""
-        domain = list(base_domain)
-        if mode == 'INCREMENTAL' and last_cursor:
-            cursor_str = last_cursor.strftime('%Y-%m-%d %H:%M:%S')
-            domain.append(('write_date', '>', cursor_str))
-        return domain
+    def _finish_log(self, log_id, status, rows=0, error=None):
+        conn = self._conn()
+        conn.autocommit = True
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""UPDATE odoo.sync_run_log SET ended_at=now(), status=%s,
+                               rows_upserted=%s, error_message=%s WHERE id=%s""",
+                            (status, rows, error[:500] if error else None, log_id))
+        finally:
+            conn.close()
+
+    def _update_cursor(self, job_code, cursor, ok=True, error=None):
+        conn = self._conn()
+        conn.autocommit = True
+        try:
+            with conn.cursor() as cur:
+                if ok:
+                    cur.execute("""UPDATE odoo.sync_job SET last_run_at=now(), last_success_at=now(),
+                                   last_cursor=%s, last_error=NULL WHERE job_code=%s""", (cursor, job_code))
+                else:
+                    cur.execute("""UPDATE odoo.sync_job SET last_run_at=now(), last_error=%s
+                                   WHERE job_code=%s""", (str(error)[:500] if error else None, job_code))
+        finally:
+            conn.close()
+
+    def _get_cursor(self, job_code):
+        conn = self._conn()
+        conn.autocommit = True
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT last_cursor FROM odoo.sync_job WHERE job_code=%s", (job_code,))
+                r = cur.fetchone()
+                return r[0] if r else None
+        finally:
+            conn.close()
+
+    def _batch_upsert(self, sql_template, values, page_size=500):
+        """Batch upsert using execute_values for performance."""
+        if not values:
+            return 0
+        conn = self._conn()
+        try:
+            with conn.cursor() as cur:
+                execute_values(cur, sql_template, values, page_size=page_size)
+            conn.commit()
+            return len(values)
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    # ---- Main entry ----
 
     def run_sync(self, job_code=None, mode=None, target='ALL', company_key=None):
-        """Main entry point. Returns summary dict."""
-        conn = self._get_pg_conn()
-        conn.autocommit = True  # Use autocommit to avoid stale transaction issues
+        conn = self._conn()
+        conn.autocommit = True
         results = []
         try:
-            # Advisory lock
             with conn.cursor() as cur:
                 cur.execute("SELECT pg_try_advisory_lock(%s)", (ADVISORY_LOCK_ID,))
-                locked = cur.fetchone()[0]
-            if not locked:
-                return {"success": False, "message": "Otra sincronización en curso. Intente más tarde.", "results": []}
+                if not cur.fetchone()[0]:
+                    conn.close()
+                    return {"success": False, "message": "Otra sincronización en curso.", "results": []}
 
-            # Read jobs
             with conn.cursor() as cur:
                 if job_code:
-                    cur.execute("SELECT job_code, mode, chunk_size FROM odoo.sync_job WHERE job_code = %s AND enabled = true ORDER BY priority", (job_code,))
+                    cur.execute("SELECT job_code,mode,chunk_size FROM odoo.sync_job WHERE job_code=%s AND enabled=true ORDER BY priority", (job_code,))
                 else:
-                    cur.execute("SELECT job_code, mode, chunk_size FROM odoo.sync_job WHERE enabled = true ORDER BY priority")
+                    cur.execute("SELECT job_code,mode,chunk_size FROM odoo.sync_job WHERE enabled=true ORDER BY priority")
                 jobs = cur.fetchall()
 
-            for jc, job_mode, chunk_size in jobs:
-                effective_mode = mode or job_mode
-                is_master = jc in MASTER_JOBS
-                is_pos = jc in POS_JOBS
-
-                # Filter by target
-                if target == 'GLOBAL_ONLY' and not is_master:
+            for jc, jm, cs in jobs:
+                em = mode or jm
+                is_m = jc in MASTER_JOBS
+                is_p = jc in POS_JOBS
+                if target == 'GLOBAL_ONLY' and not is_m:
                     continue
-                if target == 'POS_ONLY' and not is_pos:
+                if target == 'POS_ONLY' and not is_p:
                     continue
-
-                if is_master:
-                    result = self._run_job(conn, jc, 'GLOBAL', effective_mode, chunk_size)
-                    results.append(result)
-                elif is_pos:
+                if is_m:
+                    results.append(self._run_job(jc, 'GLOBAL', em, cs))
+                elif is_p:
                     if company_key:
-                        result = self._run_job(conn, jc, company_key, effective_mode, chunk_size)
-                        results.append(result)
+                        results.append(self._run_job(jc, company_key, em, cs))
                     else:
                         for ck in ['Ambission', 'ProyectoModa']:
-                            result = self._run_job(conn, jc, ck, effective_mode, chunk_size)
-                            results.append(result)
+                            results.append(self._run_job(jc, ck, em, cs))
 
-            return {
-                "success": True,
-                "message": f"Sincronización completada: {len(results)} ejecuciones",
-                "results": results,
-            }
+            return {"success": True, "message": f"Sync: {len(results)} ejecuciones", "results": results}
         except Exception as e:
-            logger.error(f"Sync engine error: {e}", exc_info=True)
+            logger.error(f"Sync error: {e}", exc_info=True)
             return {"success": False, "message": str(e), "results": results}
         finally:
             try:
@@ -240,520 +258,348 @@ class SyncService:
                 pass
             conn.close()
 
-    def _run_job(self, conn, job_code, company_key, mode, chunk_size):
-        """Run a single job for a specific company_key."""
-        log_id = self._insert_log(conn, job_code, company_key)
-        logger.info(f"Starting sync: {job_code} / {company_key} / {mode}")
+    def _run_job(self, jc, ck, mode, cs):
+        log_id = self._insert_log(jc, ck)
+        logger.info(f"Sync start: {jc}/{ck}/{mode}")
         try:
-            last_cursor = self._get_job_cursor(conn, job_code) if mode == 'INCREMENTAL' else None
-
-            handler = {
+            cursor = self._get_cursor(jc) if mode == 'INCREMENTAL' else None
+            handlers = {
                 'RES_COMPANY': self._sync_res_company,
                 'RES_USERS': self._sync_res_users,
                 'RES_PARTNER': self._sync_res_partner,
                 'PRODUCTS': self._sync_products,
                 'ATTRIBUTES': self._sync_attributes,
                 'POS_ORDERS': self._sync_pos_orders,
-            }.get(job_code)
-
-            if not handler:
-                raise Exception(f"Unknown job_code: {job_code}")
-
-            if job_code in POS_JOBS:
-                rows_upserted, new_cursor = handler(conn, company_key, mode, last_cursor, chunk_size)
+            }
+            h = handlers[jc]
+            if jc in POS_JOBS:
+                rows, new_cursor = h(ck, mode, cursor, cs)
             else:
-                rows_upserted, new_cursor = handler(conn, mode, last_cursor, chunk_size)
-
-            self._finish_log(conn, log_id, 'OK', rows_upserted=rows_upserted)
-            if new_cursor:
-                self._update_job_cursor(conn, job_code, new_cursor, success=True)
-            else:
-                self._update_job_cursor(conn, job_code, last_cursor, success=True)
-
-            logger.info(f"Sync OK: {job_code}/{company_key} -> {rows_upserted} rows")
-            return {"job_code": job_code, "company_key": company_key, "status": "OK", "rows": rows_upserted}
-
+                rows, new_cursor = h(mode, cursor, cs)
+            self._finish_log(log_id, 'OK', rows=rows)
+            self._update_cursor(jc, new_cursor or cursor, ok=True)
+            logger.info(f"Sync OK: {jc}/{ck} -> {rows} rows")
+            return {"job_code": jc, "company_key": ck, "status": "OK", "rows": rows}
         except Exception as e:
-            logger.error(f"Sync ERROR: {job_code}/{company_key}: {e}", exc_info=True)
-            self._finish_log(conn, log_id, 'ERROR', error_message=str(e)[:500])
-            self._update_job_cursor(conn, job_code, None, success=False, error=e)
-            return {"job_code": job_code, "company_key": company_key, "status": "ERROR", "error": str(e)[:200]}
+            logger.error(f"Sync ERROR: {jc}/{ck}: {e}", exc_info=True)
+            self._finish_log(log_id, 'ERROR', error=str(e))
+            self._update_cursor(jc, None, ok=False, error=e)
+            return {"job_code": jc, "company_key": ck, "status": "ERROR", "error": str(e)[:200]}
 
-    # ----------------------------------------------------------------
-    # MASTER SYNCS (company_key='GLOBAL')
-    # ----------------------------------------------------------------
+    # ---- Track max write_date ----
+    def _max_wd(self, recs, prev):
+        m = prev
+        for r in recs:
+            wd = xdt(r.get('write_date'))
+            if wd and (m is None or wd > m):
+                m = wd
+        return m
 
-    def _sync_res_company(self, conn, mode, last_cursor, chunk_size):
-        uid, password = self._auth('Ambission')
-        domain = self._build_incremental_domain([], last_cursor, mode)
-        fields = ['id', 'name', 'active', 'create_date', 'create_uid', 'write_date', 'write_uid']
-        records = self._paginate_read(uid, password, 'res.company', domain, fields, chunk_size)
-        max_write = last_cursor
-        rows = 0
-        for rec in records:
-            wd = extract_date(rec.get('write_date'))
-            if wd and (max_write is None or wd > max_write):
-                max_write = wd
-            with conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO odoo.res_company (company_key, odoo_id, name, active, odoo_write_date, odoo_create_date, odoo_create_uid, odoo_write_uid, synced_at)
-                    VALUES ('GLOBAL', %s, %s, %s, %s, %s, %s, %s, now())
-                    ON CONFLICT (company_key, odoo_id) DO UPDATE SET
-                        name = EXCLUDED.name, active = EXCLUDED.active,
-                        odoo_write_date = EXCLUDED.odoo_write_date,
-                        odoo_create_date = EXCLUDED.odoo_create_date,
-                        odoo_create_uid = EXCLUDED.odoo_create_uid,
-                        odoo_write_uid = EXCLUDED.odoo_write_uid,
-                        synced_at = now()
-                """, (
-                    rec['id'], extract_text(rec.get('name')), extract_bool(rec.get('active')),
-                    wd, extract_date(rec.get('create_date')),
-                    extract_id(rec.get('create_uid')), extract_id(rec.get('write_uid')),
-                ))
-            rows += 1
+    # ================================================================
+    # MASTERS
+    # ================================================================
 
-        return rows, max_write
+    def _sync_res_company(self, mode, cursor, cs):
+        uid, pw = self._auth('Ambission')
+        domain = self._inc_domain([], cursor, mode)
+        recs = self._paginate(uid, pw, 'res.company', domain,
+                              ['id','name','active','create_date','create_uid','write_date','write_uid'], cs)
+        vals = [(r['id'], xtxt(r.get('name')), xbool(r.get('active')),
+                 xdt(r.get('write_date')), xdt(r.get('create_date')),
+                 xid(r.get('create_uid')), xid(r.get('write_uid'))) for r in recs]
+        sql = """INSERT INTO odoo.res_company (company_key,odoo_id,name,active,odoo_write_date,odoo_create_date,odoo_create_uid,odoo_write_uid,synced_at)
+                 VALUES %s ON CONFLICT (company_key,odoo_id) DO UPDATE SET
+                 name=EXCLUDED.name,active=EXCLUDED.active,odoo_write_date=EXCLUDED.odoo_write_date,
+                 odoo_create_date=EXCLUDED.odoo_create_date,odoo_create_uid=EXCLUDED.odoo_create_uid,
+                 odoo_write_uid=EXCLUDED.odoo_write_uid,synced_at=now()"""
+        template = "('GLOBAL',%s,%s,%s,%s,%s,%s,%s,now())"
+        n = self._batch_exec(sql, template, vals)
+        return n, self._max_wd(recs, cursor)
 
-    def _sync_res_users(self, conn, mode, last_cursor, chunk_size):
-        uid, password = self._auth('Ambission')
-        domain = self._build_incremental_domain([], last_cursor, mode)
-        fields = ['id', 'login', 'name', 'active', 'create_date', 'create_uid', 'write_date', 'write_uid']
-        records = self._paginate_read(uid, password, 'res.users', domain, fields, chunk_size)
-        max_write = last_cursor
-        rows = 0
-        for rec in records:
-            wd = extract_date(rec.get('write_date'))
-            if wd and (max_write is None or wd > max_write):
-                max_write = wd
-            with conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO odoo.res_users (company_key, odoo_id, login, name, active, odoo_write_date, odoo_create_date, odoo_create_uid, odoo_write_uid, synced_at)
-                    VALUES ('GLOBAL', %s, %s, %s, %s, %s, %s, %s, %s, now())
-                    ON CONFLICT (company_key, odoo_id) DO UPDATE SET
-                        login = EXCLUDED.login, name = EXCLUDED.name, active = EXCLUDED.active,
-                        odoo_write_date = EXCLUDED.odoo_write_date,
-                        odoo_create_date = EXCLUDED.odoo_create_date,
-                        odoo_create_uid = EXCLUDED.odoo_create_uid,
-                        odoo_write_uid = EXCLUDED.odoo_write_uid,
-                        synced_at = now()
-                """, (
-                    rec['id'], extract_text(rec.get('login')), extract_text(rec.get('name')),
-                    extract_bool(rec.get('active')), wd,
-                    extract_date(rec.get('create_date')),
-                    extract_id(rec.get('create_uid')), extract_id(rec.get('write_uid')),
-                ))
-            rows += 1
+    def _sync_res_users(self, mode, cursor, cs):
+        uid, pw = self._auth('Ambission')
+        domain = self._inc_domain([], cursor, mode)
+        recs = self._paginate(uid, pw, 'res.users', domain,
+                              ['id','login','name','active','create_date','create_uid','write_date','write_uid'], cs)
+        vals = [(r['id'], xtxt(r.get('login')), xtxt(r.get('name')), xbool(r.get('active')),
+                 xdt(r.get('write_date')), xdt(r.get('create_date')),
+                 xid(r.get('create_uid')), xid(r.get('write_uid'))) for r in recs]
+        sql = """INSERT INTO odoo.res_users (company_key,odoo_id,login,name,active,odoo_write_date,odoo_create_date,odoo_create_uid,odoo_write_uid,synced_at)
+                 VALUES %s ON CONFLICT (company_key,odoo_id) DO UPDATE SET
+                 login=EXCLUDED.login,name=EXCLUDED.name,active=EXCLUDED.active,
+                 odoo_write_date=EXCLUDED.odoo_write_date,odoo_create_date=EXCLUDED.odoo_create_date,
+                 odoo_create_uid=EXCLUDED.odoo_create_uid,odoo_write_uid=EXCLUDED.odoo_write_uid,synced_at=now()"""
+        template = "('GLOBAL',%s,%s,%s,%s,%s,%s,%s,%s,now())"
+        n = self._batch_exec(sql, template, vals)
+        return n, self._max_wd(recs, cursor)
 
-        return rows, max_write
-
-    def _sync_res_partner(self, conn, mode, last_cursor, chunk_size):
-        uid, password = self._auth('Ambission')
-        domain = self._build_incremental_domain([], last_cursor, mode)
-        fields = [
-            'id', 'name', 'display_name', 'parent_id', 'commercial_partner_id',
-            'x_cliente_principal', 'x_es_principal', 'mayorista', 'x_no_llamar', 'x_ultima_venta',
-            'vat', 'phone', 'mobile', 'street', 'city', 'active',
-            'create_date', 'create_uid', 'write_date', 'write_uid',
+    def _sync_res_partner(self, mode, cursor, cs):
+        uid, pw = self._auth('Ambission')
+        domain = self._inc_domain([], cursor, mode)
+        fields = ['id','name','display_name','parent_id','commercial_partner_id',
+                   'x_cliente_principal','x_es_principal','mayorista','x_no_llamar','x_ultima_venta',
+                   'vat','phone','mobile','street','city','active',
+                   'create_date','create_uid','write_date','write_uid']
+        recs = self._paginate(uid, pw, 'res.partner', domain, fields, cs)
+        vals = [
+            (r['id'], xtxt(r.get('name')), xtxt(r.get('display_name')),
+             xid(r.get('parent_id')), xid(r.get('commercial_partner_id')),
+             xid(r.get('x_cliente_principal')), xbool_nullable(r.get('x_es_principal')),
+             xbool_nullable(r.get('mayorista')), xbool_nullable(r.get('x_no_llamar')),
+             xdt(r.get('x_ultima_venta')),
+             xtxt(r.get('vat')), xtxt(r.get('phone')), xtxt(r.get('mobile')),
+             xtxt(r.get('street')), xtxt(r.get('city')), xbool(r.get('active')),
+             xdt(r.get('write_date')), xdt(r.get('create_date')),
+             xid(r.get('create_uid')), xid(r.get('write_uid')))
+            for r in recs
         ]
-        records = self._paginate_read(uid, password, 'res.partner', domain, fields, chunk_size)
-        max_write = last_cursor
-        rows = 0
-        for rec in records:
-            wd = extract_date(rec.get('write_date'))
-            if wd and (max_write is None or wd > max_write):
-                max_write = wd
-            with conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO odoo.res_partner (
-                        company_key, odoo_id, name, display_name, parent_id, commercial_partner_id,
-                        x_cliente_principal, x_es_principal, mayorista, x_no_llamar, x_ultima_venta,
-                        vat, phone, mobile, street, city, active,
-                        odoo_write_date, odoo_create_date, odoo_create_uid, odoo_write_uid, synced_at
-                    ) VALUES (
-                        'GLOBAL', %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, now()
-                    )
-                    ON CONFLICT (company_key, odoo_id) DO UPDATE SET
-                        name=EXCLUDED.name, display_name=EXCLUDED.display_name,
-                        parent_id=EXCLUDED.parent_id, commercial_partner_id=EXCLUDED.commercial_partner_id,
-                        x_cliente_principal=EXCLUDED.x_cliente_principal, x_es_principal=EXCLUDED.x_es_principal,
-                        mayorista=EXCLUDED.mayorista, x_no_llamar=EXCLUDED.x_no_llamar,
-                        x_ultima_venta=EXCLUDED.x_ultima_venta,
-                        vat=EXCLUDED.vat, phone=EXCLUDED.phone, mobile=EXCLUDED.mobile,
-                        street=EXCLUDED.street, city=EXCLUDED.city, active=EXCLUDED.active,
-                        odoo_write_date=EXCLUDED.odoo_write_date,
-                        odoo_create_date=EXCLUDED.odoo_create_date,
-                        odoo_create_uid=EXCLUDED.odoo_create_uid,
-                        odoo_write_uid=EXCLUDED.odoo_write_uid,
-                        synced_at=now()
-                """, (
-                    rec['id'],
-                    extract_text(rec.get('name')), extract_text(rec.get('display_name')),
-                    extract_id(rec.get('parent_id')), extract_id(rec.get('commercial_partner_id')),
-                    extract_id(rec.get('x_cliente_principal')),
-                    extract_bool(rec.get('x_es_principal')) if rec.get('x_es_principal') is not False else None,
-                    extract_bool(rec.get('mayorista')) if rec.get('mayorista') is not False else None,
-                    extract_bool(rec.get('x_no_llamar')) if rec.get('x_no_llamar') is not False else None,
-                    extract_date(rec.get('x_ultima_venta')),
-                    extract_text(rec.get('vat')), extract_text(rec.get('phone')),
-                    extract_text(rec.get('mobile')), extract_text(rec.get('street')),
-                    extract_text(rec.get('city')), extract_bool(rec.get('active')),
-                    wd, extract_date(rec.get('create_date')),
-                    extract_id(rec.get('create_uid')), extract_id(rec.get('write_uid')),
-                ))
-            rows += 1
+        sql = """INSERT INTO odoo.res_partner (company_key,odoo_id,name,display_name,parent_id,commercial_partner_id,
+                 x_cliente_principal,x_es_principal,mayorista,x_no_llamar,x_ultima_venta,
+                 vat,phone,mobile,street,city,active,
+                 odoo_write_date,odoo_create_date,odoo_create_uid,odoo_write_uid,synced_at)
+                 VALUES %s ON CONFLICT (company_key,odoo_id) DO UPDATE SET
+                 name=EXCLUDED.name,display_name=EXCLUDED.display_name,parent_id=EXCLUDED.parent_id,
+                 commercial_partner_id=EXCLUDED.commercial_partner_id,
+                 x_cliente_principal=EXCLUDED.x_cliente_principal,x_es_principal=EXCLUDED.x_es_principal,
+                 mayorista=EXCLUDED.mayorista,x_no_llamar=EXCLUDED.x_no_llamar,
+                 x_ultima_venta=EXCLUDED.x_ultima_venta,
+                 vat=EXCLUDED.vat,phone=EXCLUDED.phone,mobile=EXCLUDED.mobile,
+                 street=EXCLUDED.street,city=EXCLUDED.city,active=EXCLUDED.active,
+                 odoo_write_date=EXCLUDED.odoo_write_date,odoo_create_date=EXCLUDED.odoo_create_date,
+                 odoo_create_uid=EXCLUDED.odoo_create_uid,odoo_write_uid=EXCLUDED.odoo_write_uid,
+                 synced_at=now()"""
+        template = "('GLOBAL',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())"
+        n = self._batch_exec(sql, template, vals)
+        return n, self._max_wd(recs, cursor)
 
-        return rows, max_write
+    def _sync_products(self, mode, cursor, cs):
+        uid, pw = self._auth('Ambission')
+        # Detect custom fields (x_ prefix or plain)
+        custom_map = self._detect_product_fields(uid, pw)
 
-    def _sync_products(self, conn, mode, last_cursor, chunk_size):
-        uid, password = self._auth('Ambission')
+        base = [('sale_ok','=',True),('purchase_ok','=',False),('active','=',True)]
+        domain = self._inc_domain(base, cursor, mode)
+        tmpl_fields = ['id','name','active','sale_ok','purchase_ok','list_price',
+                        'create_date','create_uid','write_date','write_uid'] + list(custom_map.values())
+        recs = self._paginate(uid, pw, 'product.template', domain, tmpl_fields, cs)
 
-        # A) product.template
-        base_domain = [('sale_ok', '=', True), ('purchase_ok', '=', False), ('active', '=', True)]
-        domain = self._build_incremental_domain(base_domain, last_cursor, mode)
-
-        tmpl_fields = [
-            'id', 'name', 'active', 'sale_ok', 'purchase_ok', 'list_price',
-            'create_date', 'create_uid', 'write_date', 'write_uid',
+        vals = [
+            (r['id'], xtxt(r.get('name')), xbool(r.get('active')),
+             xbool(r.get('sale_ok')), xbool(r.get('purchase_ok')), xnum(r.get('list_price')),
+             xtxt(r.get(custom_map.get('marca','marca'))),
+             xtxt(r.get(custom_map.get('tipo','tipo'))),
+             xtxt(r.get(custom_map.get('tela','tela'))),
+             xtxt(r.get(custom_map.get('entalle','entalle'))),
+             xtxt(r.get(custom_map.get('tel','tel'))),
+             xtxt(r.get(custom_map.get('hilo','hilo'))),
+             xdt(r.get('write_date')), xdt(r.get('create_date')),
+             xid(r.get('create_uid')), xid(r.get('write_uid')))
+            for r in recs
         ]
-        # Try custom fields - they might have x_ prefix or not
-        custom_fields = ['marca', 'tipo', 'tela', 'entalle', 'tel', 'hilo']
-        custom_x_fields = ['x_marca', 'x_tipo', 'x_tela', 'x_entalle', 'x_tel', 'x_hilo']
+        sql = """INSERT INTO odoo.product_template (company_key,odoo_id,name,active,sale_ok,purchase_ok,list_price,
+                 marca,tipo,tela,entalle,tel,hilo,odoo_write_date,odoo_create_date,odoo_create_uid,odoo_write_uid,synced_at)
+                 VALUES %s ON CONFLICT (company_key,odoo_id) DO UPDATE SET
+                 name=EXCLUDED.name,active=EXCLUDED.active,sale_ok=EXCLUDED.sale_ok,purchase_ok=EXCLUDED.purchase_ok,
+                 list_price=EXCLUDED.list_price,marca=EXCLUDED.marca,tipo=EXCLUDED.tipo,tela=EXCLUDED.tela,
+                 entalle=EXCLUDED.entalle,tel=EXCLUDED.tel,hilo=EXCLUDED.hilo,
+                 odoo_write_date=EXCLUDED.odoo_write_date,odoo_create_date=EXCLUDED.odoo_create_date,
+                 odoo_create_uid=EXCLUDED.odoo_create_uid,odoo_write_uid=EXCLUDED.odoo_write_uid,synced_at=now()"""
+        tmpl_template = "('GLOBAL',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())"
+        tmpl_rows = self._batch_exec(sql, tmpl_template, vals)
+        max_w = self._max_wd(recs, cursor)
 
-        # Try with x_ prefix first (common in Odoo 10 custom fields)
-        try:
-            test_fields = tmpl_fields + custom_x_fields
-            self.client.search_read(self.odoo_db, uid, password, 'product.template', [('id', '=', 1)], test_fields, limit=1)
-            actual_custom = custom_x_fields
-            custom_mapping = dict(zip(custom_fields, custom_x_fields))
-        except Exception:
-            # Try without prefix
-            try:
-                test_fields = tmpl_fields + custom_fields
-                self.client.search_read(self.odoo_db, uid, password, 'product.template', [('id', '=', 1)], test_fields, limit=1)
-                actual_custom = custom_fields
-                custom_mapping = dict(zip(custom_fields, custom_fields))
-            except Exception:
-                actual_custom = []
-                custom_mapping = {}
-                logger.warning("Custom product fields not found, skipping marca/tipo/tela/entalle/tel/hilo")
-
-        all_tmpl_fields = tmpl_fields + actual_custom
-        templates = self._paginate_read(uid, password, 'product.template', domain, all_tmpl_fields, chunk_size)
-
-        max_write = last_cursor
-        tmpl_rows = 0
-        tmpl_ids = []
-
-        for rec in templates:
-            wd = extract_date(rec.get('write_date'))
-            if wd and (max_write is None or wd > max_write):
-                max_write = wd
-            tmpl_ids.append(rec['id'])
-
-            with conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO odoo.product_template (
-                        company_key, odoo_id, name, active, sale_ok, purchase_ok, list_price,
-                        marca, tipo, tela, entalle, tel, hilo,
-                        odoo_write_date, odoo_create_date, odoo_create_uid, odoo_write_uid, synced_at
-                    ) VALUES ('GLOBAL', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now())
-                    ON CONFLICT (company_key, odoo_id) DO UPDATE SET
-                        name=EXCLUDED.name, active=EXCLUDED.active, sale_ok=EXCLUDED.sale_ok,
-                        purchase_ok=EXCLUDED.purchase_ok, list_price=EXCLUDED.list_price,
-                        marca=EXCLUDED.marca, tipo=EXCLUDED.tipo, tela=EXCLUDED.tela,
-                        entalle=EXCLUDED.entalle, tel=EXCLUDED.tel, hilo=EXCLUDED.hilo,
-                        odoo_write_date=EXCLUDED.odoo_write_date,
-                        odoo_create_date=EXCLUDED.odoo_create_date,
-                        odoo_create_uid=EXCLUDED.odoo_create_uid,
-                        odoo_write_uid=EXCLUDED.odoo_write_uid,
-                        synced_at=now()
-                """, (
-                    rec['id'], extract_text(rec.get('name')),
-                    extract_bool(rec.get('active')), extract_bool(rec.get('sale_ok')),
-                    extract_bool(rec.get('purchase_ok')), extract_numeric(rec.get('list_price')),
-                    extract_text(rec.get(custom_mapping.get('marca', 'marca'))),
-                    extract_text(rec.get(custom_mapping.get('tipo', 'tipo'))),
-                    extract_text(rec.get(custom_mapping.get('tela', 'tela'))),
-                    extract_text(rec.get(custom_mapping.get('entalle', 'entalle'))),
-                    extract_text(rec.get(custom_mapping.get('tel', 'tel'))),
-                    extract_text(rec.get(custom_mapping.get('hilo', 'hilo'))),
-                    wd, extract_date(rec.get('create_date')),
-                    extract_id(rec.get('create_uid')), extract_id(rec.get('write_uid')),
-                ))
-            tmpl_rows += 1
-
-
-        # B) product.product (variants of fetched templates)
+        # B) product.product
+        tmpl_ids = [r['id'] for r in recs]
         pp_rows = 0
+        rel_rows = 0
         if tmpl_ids:
-            pp_domain = [('product_tmpl_id', 'in', tmpl_ids)]
-            pp_fields = [
-                'id', 'product_tmpl_id', 'barcode', 'active',
-                'attribute_value_ids',
-                'create_date', 'create_uid', 'write_date', 'write_uid',
-            ]
+            pp_fields = ['id','product_tmpl_id','barcode','active',
+                         'attribute_value_ids','create_date','create_uid','write_date','write_uid']
             try:
-                variants = self._paginate_read(uid, password, 'product.product', pp_domain, pp_fields, chunk_size)
+                variants = self._paginate(uid, pw, 'product.product', [('product_tmpl_id','in',tmpl_ids)], pp_fields, cs)
             except Exception:
-                # attribute_value_ids might not exist in Odoo 10
                 pp_fields.remove('attribute_value_ids')
-                variants = self._paginate_read(uid, password, 'product.product', pp_domain, pp_fields, chunk_size)
+                variants = self._paginate(uid, pw, 'product.product', [('product_tmpl_id','in',tmpl_ids)], pp_fields, cs)
 
-            for rec in variants:
-                wd = extract_date(rec.get('write_date'))
-                if wd and (max_write is None or wd > max_write):
-                    max_write = wd
-                with conn.cursor() as cur:
-                    cur.execute("""
-                        INSERT INTO odoo.product_product (
-                            company_key, odoo_id, product_tmpl_id, barcode, active,
-                            odoo_write_date, odoo_create_date, odoo_create_uid, odoo_write_uid, synced_at
-                        ) VALUES ('GLOBAL', %s, %s, %s, %s, %s, %s, %s, %s, now())
-                        ON CONFLICT (company_key, odoo_id) DO UPDATE SET
-                            product_tmpl_id=EXCLUDED.product_tmpl_id, barcode=EXCLUDED.barcode,
-                            active=EXCLUDED.active, odoo_write_date=EXCLUDED.odoo_write_date,
-                            odoo_create_date=EXCLUDED.odoo_create_date,
-                            odoo_create_uid=EXCLUDED.odoo_create_uid,
-                            odoo_write_uid=EXCLUDED.odoo_write_uid,
-                            synced_at=now()
-                    """, (
-                        rec['id'], extract_id(rec.get('product_tmpl_id')),
-                        extract_text(rec.get('barcode')), extract_bool(rec.get('active')),
-                        wd, extract_date(rec.get('create_date')),
-                        extract_id(rec.get('create_uid')), extract_id(rec.get('write_uid')),
-                    ))
-                pp_rows += 1
+            pp_vals = [
+                (r['id'], xid(r.get('product_tmpl_id')), xtxt(r.get('barcode')), xbool(r.get('active')),
+                 xdt(r.get('write_date')), xdt(r.get('create_date')),
+                 xid(r.get('create_uid')), xid(r.get('write_uid')))
+                for r in variants
+            ]
+            pp_sql = """INSERT INTO odoo.product_product (company_key,odoo_id,product_tmpl_id,barcode,active,
+                        odoo_write_date,odoo_create_date,odoo_create_uid,odoo_write_uid,synced_at)
+                        VALUES %s ON CONFLICT (company_key,odoo_id) DO UPDATE SET
+                        product_tmpl_id=EXCLUDED.product_tmpl_id,barcode=EXCLUDED.barcode,active=EXCLUDED.active,
+                        odoo_write_date=EXCLUDED.odoo_write_date,odoo_create_date=EXCLUDED.odoo_create_date,
+                        odoo_create_uid=EXCLUDED.odoo_create_uid,odoo_write_uid=EXCLUDED.odoo_write_uid,synced_at=now()"""
+            pp_rows = self._batch_exec(pp_sql, "('GLOBAL',%s,%s,%s,%s,%s,%s,%s,%s,now())", pp_vals)
+            max_w = self._max_wd(variants, max_w)
 
-                # Populate variant-attribute rel
-                attr_val_ids = rec.get('attribute_value_ids', [])
-                if attr_val_ids:
-                    for av_id in attr_val_ids:
-                        with conn.cursor() as cur:
-                            cur.execute("""
-                                INSERT INTO odoo.product_attribute_value_product_product_rel
-                                    (company_key, product_product_id, product_attribute_value_id)
-                                VALUES ('GLOBAL', %s, %s)
-                                ON CONFLICT DO NOTHING
-                            """, (rec['id'], av_id))
-    
+            # Variant-attribute rel
+            rel_vals = []
+            for r in variants:
+                for av_id in (r.get('attribute_value_ids') or []):
+                    rel_vals.append((r['id'], av_id))
+            if rel_vals:
+                rel_sql = """INSERT INTO odoo.product_attribute_value_product_product_rel
+                             (company_key,product_product_id,product_attribute_value_id)
+                             VALUES %s ON CONFLICT DO NOTHING"""
+                rel_rows = self._batch_exec(rel_sql, "('GLOBAL',%s,%s)", rel_vals)
 
-        return tmpl_rows + pp_rows, max_write
+        return tmpl_rows + pp_rows + rel_rows, max_w
 
-    def _sync_attributes(self, conn, mode, last_cursor, chunk_size):
-        uid, password = self._auth('Ambission')
-        total_rows = 0
+    def _detect_product_fields(self, uid, pw):
+        """Detect whether custom fields use x_ prefix or not."""
+        custom = ['marca','tipo','tela','entalle','tel','hilo']
+        x_custom = ['x_marca','x_tipo','x_tela','x_entalle','x_tel','x_hilo']
+        try:
+            self.client.search_read(self.odoo_db, uid, pw, 'product.template', [('id','=',1)],
+                                    ['id'] + x_custom, limit=1)
+            return dict(zip(custom, x_custom))
+        except Exception:
+            try:
+                self.client.search_read(self.odoo_db, uid, pw, 'product.template', [('id','=',1)],
+                                        ['id'] + custom, limit=1)
+                return dict(zip(custom, custom))
+            except Exception:
+                logger.warning("Custom product fields not available")
+                return {c: c for c in custom}
 
-        # 1) product.attribute
-        domain = self._build_incremental_domain([], last_cursor, mode)
-        fields = ['id', 'name', 'create_date', 'create_uid', 'write_date', 'write_uid']
-        max_write = last_cursor
+    def _sync_attributes(self, mode, cursor, cs):
+        uid, pw = self._auth('Ambission')
+        total = 0
+        max_w = cursor
 
-        records = self._paginate_read(uid, password, 'product.attribute', domain, fields, chunk_size)
-        for rec in records:
-            wd = extract_date(rec.get('write_date'))
-            if wd and (max_write is None or wd > max_write):
-                max_write = wd
-            with conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO odoo.product_attribute (company_key, odoo_id, name, odoo_write_date, synced_at)
-                    VALUES ('GLOBAL', %s, %s, %s, now())
-                    ON CONFLICT (company_key, odoo_id) DO UPDATE SET
-                        name=EXCLUDED.name, odoo_write_date=EXCLUDED.odoo_write_date, synced_at=now()
-                """, (rec['id'], extract_text(rec.get('name')), wd))
-            total_rows += 1
+        # product.attribute
+        recs = self._paginate(uid, pw, 'product.attribute',
+                              self._inc_domain([], cursor, mode),
+                              ['id','name','write_date'], cs)
+        vals = [(r['id'], xtxt(r.get('name')), xdt(r.get('write_date'))) for r in recs]
+        sql = """INSERT INTO odoo.product_attribute (company_key,odoo_id,name,odoo_write_date,synced_at)
+                 VALUES %s ON CONFLICT (company_key,odoo_id) DO UPDATE SET
+                 name=EXCLUDED.name,odoo_write_date=EXCLUDED.odoo_write_date,synced_at=now()"""
+        total += self._batch_exec(sql, "('GLOBAL',%s,%s,%s,now())", vals)
+        max_w = self._max_wd(recs, max_w)
 
+        # product.attribute.value
+        recs = self._paginate(uid, pw, 'product.attribute.value',
+                              self._inc_domain([], cursor, mode),
+                              ['id','attribute_id','name','write_date'], cs)
+        vals = [(r['id'], xid(r.get('attribute_id')), xtxt(r.get('name')), xdt(r.get('write_date'))) for r in recs]
+        sql = """INSERT INTO odoo.product_attribute_value (company_key,odoo_id,attribute_id,name,odoo_write_date,synced_at)
+                 VALUES %s ON CONFLICT (company_key,odoo_id) DO UPDATE SET
+                 attribute_id=EXCLUDED.attribute_id,name=EXCLUDED.name,
+                 odoo_write_date=EXCLUDED.odoo_write_date,synced_at=now()"""
+        total += self._batch_exec(sql, "('GLOBAL',%s,%s,%s,%s,now())", vals)
+        max_w = self._max_wd(recs, max_w)
 
-        # 2) product.attribute.value
-        domain = self._build_incremental_domain([], last_cursor, mode)
-        fields = ['id', 'attribute_id', 'name', 'create_date', 'create_uid', 'write_date', 'write_uid']
-        records = self._paginate_read(uid, password, 'product.attribute.value', domain, fields, chunk_size)
-        for rec in records:
-            wd = extract_date(rec.get('write_date'))
-            if wd and (max_write is None or wd > max_write):
-                max_write = wd
-            with conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO odoo.product_attribute_value (company_key, odoo_id, attribute_id, name, odoo_write_date, synced_at)
-                    VALUES ('GLOBAL', %s, %s, %s, %s, now())
-                    ON CONFLICT (company_key, odoo_id) DO UPDATE SET
-                        attribute_id=EXCLUDED.attribute_id, name=EXCLUDED.name,
-                        odoo_write_date=EXCLUDED.odoo_write_date, synced_at=now()
-                """, (rec['id'], extract_id(rec.get('attribute_id')), extract_text(rec.get('name')), wd))
-            total_rows += 1
+        # product.template.attribute.line
+        recs = self._paginate(uid, pw, 'product.template.attribute.line',
+                              self._inc_domain([], cursor, mode),
+                              ['id','product_tmpl_id','attribute_id','write_date'], cs)
+        vals = [(r['id'], xid(r.get('product_tmpl_id')), xid(r.get('attribute_id')), xdt(r.get('write_date'))) for r in recs]
+        sql = """INSERT INTO odoo.product_template_attribute_line (company_key,odoo_id,product_tmpl_id,attribute_id,odoo_write_date,synced_at)
+                 VALUES %s ON CONFLICT (company_key,odoo_id) DO UPDATE SET
+                 product_tmpl_id=EXCLUDED.product_tmpl_id,attribute_id=EXCLUDED.attribute_id,
+                 odoo_write_date=EXCLUDED.odoo_write_date,synced_at=now()"""
+        total += self._batch_exec(sql, "('GLOBAL',%s,%s,%s,%s,now())", vals)
+        max_w = self._max_wd(recs, max_w)
 
+        return total, max_w
 
-        # 3) product.template.attribute.line
-        domain = self._build_incremental_domain([], last_cursor, mode)
-        fields = ['id', 'product_tmpl_id', 'attribute_id', 'create_date', 'create_uid', 'write_date', 'write_uid']
-        records = self._paginate_read(uid, password, 'product.template.attribute.line', domain, fields, chunk_size)
-        for rec in records:
-            wd = extract_date(rec.get('write_date'))
-            if wd and (max_write is None or wd > max_write):
-                max_write = wd
-            with conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO odoo.product_template_attribute_line (
-                        company_key, odoo_id, product_tmpl_id, attribute_id, odoo_write_date, synced_at
-                    ) VALUES ('GLOBAL', %s, %s, %s, %s, now())
-                    ON CONFLICT (company_key, odoo_id) DO UPDATE SET
-                        product_tmpl_id=EXCLUDED.product_tmpl_id, attribute_id=EXCLUDED.attribute_id,
-                        odoo_write_date=EXCLUDED.odoo_write_date, synced_at=now()
-                """, (
-                    rec['id'], extract_id(rec.get('product_tmpl_id')),
-                    extract_id(rec.get('attribute_id')), wd,
-                ))
-            total_rows += 1
+    # ================================================================
+    # POS
+    # ================================================================
 
+    def _sync_pos_orders(self, ck, mode, cursor, cs):
+        uid, pw = self._auth(ck)
+        ctx, cid = self._company_ctx(ck)
+        base = [('company_id','=',cid)] if cid else []
+        domain = self._inc_domain(base, cursor, mode)
 
-        return total_rows, max_write
+        order_fields = ['id','name','date_order','partner_id','user_id',
+                        'amount_total','amount_tax','state',
+                        'is_cancel','order_cancel','x_cliente_principal','reserva','reserva_use_id',
+                        'company_id','create_date','create_uid','write_date','write_uid']
 
-    # ----------------------------------------------------------------
-    # POS SYNC (per company)
-    # ----------------------------------------------------------------
-
-    def _sync_pos_orders(self, conn, company_key, mode, last_cursor, chunk_size):
-        uid, password = self._auth(company_key)
-        ctx, company_id = self._get_company_context(company_key)
-
-        # Build domain
-        base_domain = []
-        if company_id:
-            base_domain.append(('company_id', '=', company_id))
-        domain = self._build_incremental_domain(base_domain, last_cursor, mode)
-
-        order_fields = [
-            'id', 'name', 'date_order', 'partner_id', 'user_id',
-            'amount_total', 'amount_tax', 'state',
-            'is_cancel', 'order_cancel', 'x_cliente_principal', 'reserva', 'reserva_use_id',
-            'company_id',
-            'create_date', 'create_uid', 'write_date', 'write_uid',
-        ]
-
-        max_write = last_cursor
-        order_rows = 0
-        line_rows = 0
-
-        # Paginated fetch of orders
+        max_w = cursor
+        total_orders = 0
+        total_lines = 0
         offset = 0
+
         while True:
-            orders = self.client.search_read(
-                self.odoo_db, uid, password, 'pos.order', domain, order_fields,
-                limit=chunk_size, offset=offset, order='write_date asc', context=ctx,
-            )
+            orders = self.client.search_read(self.odoo_db, uid, pw, 'pos.order', domain, order_fields,
+                                             limit=cs, offset=offset, order='write_date asc', context=ctx)
             if not orders:
                 break
 
-            order_ids = []
-            for rec in orders:
-                wd = extract_date(rec.get('write_date'))
-                if wd and (max_write is None or wd > max_write):
-                    max_write = wd
-                order_ids.append(rec['id'])
+            o_vals = [
+                (ck, r['id'], xtxt(r.get('name')), xdt(r.get('date_order')),
+                 xid(r.get('partner_id')), xid(r.get('user_id')),
+                 xnum(r.get('amount_total')), xnum(r.get('amount_tax')),
+                 xtxt(r.get('state')),
+                 xbool_nullable(r.get('is_cancel')), xbool_nullable(r.get('order_cancel')),
+                 xid(r.get('x_cliente_principal')), xbool_nullable(r.get('reserva')),
+                 xid(r.get('reserva_use_id')),
+                 xdt(r.get('write_date')), xdt(r.get('create_date')),
+                 xid(r.get('create_uid')), xid(r.get('write_uid')))
+                for r in orders
+            ]
+            o_sql = """INSERT INTO odoo.pos_order (company_key,odoo_id,name,date_order,partner_id,user_id,
+                       amount_total,amount_tax,state,is_cancel,order_cancel,
+                       x_cliente_principal,reserva,reserva_use_id,
+                       odoo_write_date,odoo_create_date,odoo_create_uid,odoo_write_uid,synced_at)
+                       VALUES %s ON CONFLICT (company_key,odoo_id) DO UPDATE SET
+                       name=EXCLUDED.name,date_order=EXCLUDED.date_order,partner_id=EXCLUDED.partner_id,
+                       user_id=EXCLUDED.user_id,amount_total=EXCLUDED.amount_total,amount_tax=EXCLUDED.amount_tax,
+                       state=EXCLUDED.state,is_cancel=EXCLUDED.is_cancel,order_cancel=EXCLUDED.order_cancel,
+                       x_cliente_principal=EXCLUDED.x_cliente_principal,reserva=EXCLUDED.reserva,
+                       reserva_use_id=EXCLUDED.reserva_use_id,
+                       odoo_write_date=EXCLUDED.odoo_write_date,odoo_create_date=EXCLUDED.odoo_create_date,
+                       odoo_create_uid=EXCLUDED.odoo_create_uid,odoo_write_uid=EXCLUDED.odoo_write_uid,synced_at=now()"""
+            total_orders += self._batch_exec(o_sql, "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())", o_vals)
+            max_w = self._max_wd(orders, max_w)
 
-                with conn.cursor() as cur:
-                    cur.execute("""
-                        INSERT INTO odoo.pos_order (
-                            company_key, odoo_id, name, date_order, partner_id, user_id,
-                            amount_total, amount_tax, state, is_cancel, order_cancel,
-                            x_cliente_principal, reserva, reserva_use_id,
-                            odoo_write_date, odoo_create_date, odoo_create_uid, odoo_write_uid, synced_at
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now())
-                        ON CONFLICT (company_key, odoo_id) DO UPDATE SET
-                            name=EXCLUDED.name, date_order=EXCLUDED.date_order,
-                            partner_id=EXCLUDED.partner_id, user_id=EXCLUDED.user_id,
-                            amount_total=EXCLUDED.amount_total, amount_tax=EXCLUDED.amount_tax,
-                            state=EXCLUDED.state, is_cancel=EXCLUDED.is_cancel, order_cancel=EXCLUDED.order_cancel,
-                            x_cliente_principal=EXCLUDED.x_cliente_principal,
-                            reserva=EXCLUDED.reserva, reserva_use_id=EXCLUDED.reserva_use_id,
-                            odoo_write_date=EXCLUDED.odoo_write_date,
-                            odoo_create_date=EXCLUDED.odoo_create_date,
-                            odoo_create_uid=EXCLUDED.odoo_create_uid,
-                            odoo_write_uid=EXCLUDED.odoo_write_uid,
-                            synced_at=now()
-                    """, (
-                        company_key, rec['id'],
-                        extract_text(rec.get('name')),
-                        extract_date(rec.get('date_order')),
-                        extract_id(rec.get('partner_id')),
-                        extract_id(rec.get('user_id')),
-                        extract_numeric(rec.get('amount_total')),
-                        extract_numeric(rec.get('amount_tax')),
-                        extract_text(rec.get('state')),
-                        extract_bool(rec.get('is_cancel')) if rec.get('is_cancel') is not False else None,
-                        extract_bool(rec.get('order_cancel')) if rec.get('order_cancel') is not False else None,
-                        extract_id(rec.get('x_cliente_principal')),
-                        extract_bool(rec.get('reserva')) if rec.get('reserva') is not False else None,
-                        extract_id(rec.get('reserva_use_id')),
-                        wd,
-                        extract_date(rec.get('create_date')),
-                        extract_id(rec.get('create_uid')),
-                        extract_id(rec.get('write_uid')),
-                    ))
-                order_rows += 1
-    
-
-            # Fetch lines for this batch of orders
-            if order_ids:
-                line_fields = [
-                    'id', 'order_id', 'product_id', 'qty', 'price_unit', 'discount', 'price_subtotal',
-                    'create_date', 'create_uid', 'write_date', 'write_uid',
+            # Lines
+            oids = [r['id'] for r in orders]
+            if oids:
+                lines = self._paginate(uid, pw, 'pos.order.line', [('order_id','in',oids)],
+                                       ['id','order_id','product_id','qty','price_unit','discount','price_subtotal','write_date'], cs)
+                l_vals = [
+                    (ck, l['id'], xid(l.get('order_id')), xid(l.get('product_id')),
+                     xnum(l.get('qty')), xnum(l.get('price_unit')),
+                     xnum(l.get('discount')), xnum(l.get('price_subtotal')),
+                     xdt(l.get('write_date')))
+                    for l in lines
                 ]
-                lines = self._paginate_read(
-                    uid, password, 'pos.order.line',
-                    [('order_id', 'in', order_ids)], line_fields, chunk_size
-                )
-                for line in lines:
-                    with conn.cursor() as cur:
-                        cur.execute("""
-                            INSERT INTO odoo.pos_order_line (
-                                company_key, odoo_id, order_id, product_id, qty, price_unit,
-                                discount, price_subtotal, odoo_write_date, synced_at
-                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, now())
-                            ON CONFLICT (company_key, odoo_id) DO UPDATE SET
-                                order_id=EXCLUDED.order_id, product_id=EXCLUDED.product_id,
-                                qty=EXCLUDED.qty, price_unit=EXCLUDED.price_unit,
-                                discount=EXCLUDED.discount, price_subtotal=EXCLUDED.price_subtotal,
-                                odoo_write_date=EXCLUDED.odoo_write_date, synced_at=now()
-                        """, (
-                            company_key, line['id'],
-                            extract_id(line.get('order_id')),
-                            extract_id(line.get('product_id')),
-                            extract_numeric(line.get('qty')),
-                            extract_numeric(line.get('price_unit')),
-                            extract_numeric(line.get('discount')),
-                            extract_numeric(line.get('price_subtotal')),
-                            extract_date(line.get('write_date')),
-                        ))
-                    line_rows += 1
-        
+                l_sql = """INSERT INTO odoo.pos_order_line (company_key,odoo_id,order_id,product_id,qty,price_unit,
+                           discount,price_subtotal,odoo_write_date,synced_at)
+                           VALUES %s ON CONFLICT (company_key,odoo_id) DO UPDATE SET
+                           order_id=EXCLUDED.order_id,product_id=EXCLUDED.product_id,qty=EXCLUDED.qty,
+                           price_unit=EXCLUDED.price_unit,discount=EXCLUDED.discount,
+                           price_subtotal=EXCLUDED.price_subtotal,odoo_write_date=EXCLUDED.odoo_write_date,synced_at=now()"""
+                total_lines += self._batch_exec(l_sql, "(%s,%s,%s,%s,%s,%s,%s,%s,%s,now())", l_vals)
 
-            offset += chunk_size
-            if len(orders) < chunk_size:
+            offset += cs
+            if len(orders) < cs:
                 break
 
-        return order_rows + line_rows, max_write
+        return total_orders + total_lines, max_w
 
-    # ----------------------------------------------------------------
-    # Helper: paginated search_read
-    # ----------------------------------------------------------------
+    # ---- Batch exec helper ----
 
-    def _paginate_read(self, uid, password, model, domain, fields, chunk_size, context=None):
-        """Fetch all records matching domain using pagination."""
-        all_records = []
-        offset = 0
-        while True:
-            batch = self.client.search_read(
-                self.odoo_db, uid, password, model, domain, fields,
-                limit=chunk_size, offset=offset, context=context,
-            )
-            if not batch:
-                break
-            all_records.extend(batch)
-            offset += chunk_size
-            if len(batch) < chunk_size:
-                break
-        logger.info(f"  Fetched {len(all_records)} records from {model}")
-        return all_records
+    def _batch_exec(self, sql, template, values, page_size=1000):
+        if not values:
+            return 0
+        conn = self._conn()
+        try:
+            with conn.cursor() as cur:
+                execute_values(cur, sql, values, template=template, page_size=page_size)
+            conn.commit()
+            return len(values)
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
