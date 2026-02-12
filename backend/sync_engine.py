@@ -307,7 +307,7 @@ class SyncService:
                     extract_id(rec.get('create_uid')), extract_id(rec.get('write_uid')),
                 ))
             rows += 1
-        conn.commit()
+
         return rows, max_write
 
     def _sync_res_users(self, conn, mode, last_cursor, chunk_size):
@@ -339,7 +339,7 @@ class SyncService:
                     extract_id(rec.get('create_uid')), extract_id(rec.get('write_uid')),
                 ))
             rows += 1
-        conn.commit()
+
         return rows, max_write
 
     def _sync_res_partner(self, conn, mode, last_cursor, chunk_size):
@@ -400,7 +400,7 @@ class SyncService:
                     extract_id(rec.get('create_uid')), extract_id(rec.get('write_uid')),
                 ))
             rows += 1
-        conn.commit()
+
         return rows, max_write
 
     def _sync_products(self, conn, mode, last_cursor, chunk_size):
@@ -480,7 +480,7 @@ class SyncService:
                     extract_id(rec.get('create_uid')), extract_id(rec.get('write_uid')),
                 ))
             tmpl_rows += 1
-        conn.commit()
+
 
         # B) product.product (variants of fetched templates)
         pp_rows = 0
@@ -534,7 +534,7 @@ class SyncService:
                                 VALUES ('GLOBAL', %s, %s)
                                 ON CONFLICT DO NOTHING
                             """, (rec['id'], av_id))
-            conn.commit()
+    
 
         return tmpl_rows + pp_rows, max_write
 
@@ -560,7 +560,7 @@ class SyncService:
                         name=EXCLUDED.name, odoo_write_date=EXCLUDED.odoo_write_date, synced_at=now()
                 """, (rec['id'], extract_text(rec.get('name')), wd))
             total_rows += 1
-        conn.commit()
+
 
         # 2) product.attribute.value
         domain = self._build_incremental_domain([], last_cursor, mode)
@@ -579,7 +579,7 @@ class SyncService:
                         odoo_write_date=EXCLUDED.odoo_write_date, synced_at=now()
                 """, (rec['id'], extract_id(rec.get('attribute_id')), extract_text(rec.get('name')), wd))
             total_rows += 1
-        conn.commit()
+
 
         # 3) product.template.attribute.line
         domain = self._build_incremental_domain([], last_cursor, mode)
@@ -602,7 +602,7 @@ class SyncService:
                     extract_id(rec.get('attribute_id')), wd,
                 ))
             total_rows += 1
-        conn.commit()
+
 
         return total_rows, max_write
 
@@ -689,7 +689,7 @@ class SyncService:
                         extract_id(rec.get('write_uid')),
                     ))
                 order_rows += 1
-            conn.commit()
+    
 
             # Fetch lines for this batch of orders
             if order_ids:
@@ -724,7 +724,7 @@ class SyncService:
                             extract_date(line.get('write_date')),
                         ))
                     line_rows += 1
-                conn.commit()
+        
 
             offset += chunk_size
             if len(orders) < chunk_size:
