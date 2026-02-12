@@ -352,6 +352,39 @@ LEFT JOIN odoo.v_partner_account_map map
     AND map.contacto_partner_id = po.partner_id;
 
 -- ============================================================
+-- ALTERACIONES: columnas audit (odoo_create_date, odoo_create_uid, odoo_write_uid)
+-- ============================================================
+
+-- res_partner
+ALTER TABLE odoo.res_partner
+  ADD COLUMN IF NOT EXISTS odoo_create_date TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS odoo_create_uid INT,
+  ADD COLUMN IF NOT EXISTS odoo_write_uid INT;
+
+-- product_template
+ALTER TABLE odoo.product_template
+  ADD COLUMN IF NOT EXISTS odoo_create_date TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS odoo_create_uid INT,
+  ADD COLUMN IF NOT EXISTS odoo_write_uid INT;
+
+-- product_product
+ALTER TABLE odoo.product_product
+  ADD COLUMN IF NOT EXISTS odoo_create_date TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS odoo_create_uid INT,
+  ADD COLUMN IF NOT EXISTS odoo_write_uid INT;
+
+-- pos_order
+ALTER TABLE odoo.pos_order
+  ADD COLUMN IF NOT EXISTS odoo_create_date TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS odoo_create_uid INT,
+  ADD COLUMN IF NOT EXISTS odoo_write_uid INT;
+
+-- índices audit
+CREATE INDEX IF NOT EXISTS idx_partner_create_date ON odoo.res_partner (company_key, odoo_create_date DESC);
+CREATE INDEX IF NOT EXISTS idx_ptemplate_create_date ON odoo.product_template (company_key, odoo_create_date DESC);
+CREATE INDEX IF NOT EXISTS idx_pos_order_create_date ON odoo.pos_order (company_key, odoo_create_date DESC);
+
+-- ============================================================
 -- SEED: Insertar jobs base (idempotente)
 -- ============================================================
 INSERT INTO odoo.sync_job (job_code, run_time, priority)
