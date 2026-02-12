@@ -182,6 +182,7 @@ class SyncService:
     def run_sync(self, job_code=None, mode=None, target='ALL', company_key=None):
         """Main entry point. Returns summary dict."""
         conn = self._get_pg_conn()
+        conn.autocommit = True  # Use autocommit to avoid stale transaction issues
         results = []
         try:
             # Advisory lock
@@ -234,7 +235,6 @@ class SyncService:
             try:
                 with conn.cursor() as cur:
                     cur.execute("SELECT pg_advisory_unlock(%s)", (ADVISORY_LOCK_ID,))
-                conn.commit()
             except Exception:
                 pass
             conn.close()
