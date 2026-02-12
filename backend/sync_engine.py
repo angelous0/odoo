@@ -19,8 +19,12 @@ ADVISORY_LOCK_ID = 777777
 
 def extract_id(val):
     """Extract integer id from Odoo many2one field ([id, name] or int or False)."""
+    if val is False or val is None:
+        return None
     if isinstance(val, (list, tuple)) and len(val) >= 1:
         return val[0]
+    if isinstance(val, bool):
+        return None
     if isinstance(val, int):
         return val
     return None
