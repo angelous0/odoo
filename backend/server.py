@@ -265,7 +265,6 @@ async def get_migration_status():
     try:
         with get_pg_conn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                # Check schema exists
                 cur.execute("""
                     SELECT EXISTS(
                         SELECT 1 FROM information_schema.schemata 
@@ -284,7 +283,6 @@ async def get_migration_status():
                         "all_ok": False,
                     }
 
-                # Count existing tables
                 cur.execute("""
                     SELECT count(*) as cnt 
                     FROM information_schema.tables 
@@ -293,7 +291,6 @@ async def get_migration_status():
                 """)
                 tables_found = cur.fetchone()["cnt"]
 
-                # Count existing views
                 cur.execute("""
                     SELECT count(*) as cnt 
                     FROM information_schema.views 
@@ -301,7 +298,6 @@ async def get_migration_status():
                 """)
                 views_found = cur.fetchone()["cnt"]
 
-                # Count total indexes
                 cur.execute("""
                     SELECT count(*) as cnt 
                     FROM pg_indexes 
@@ -329,6 +325,119 @@ async def get_migration_status():
             "all_ok": False,
             "error": str(e),
         }
+
+
+# ----------------------------------------------------------------
+# SYNC ENDPOINTS
+# ----------------------------------------------------------------
+
+class SyncRunRequest(BaseModel):
+    job_code: Optional[str] = None
+    mode: Optional[str] = None  # INCREMENTAL or FULL
+    target: Optional[str] = 'ALL'  # ALL, GLOBAL_ONLY, POS_ONLY
+    company_key: Optional[str] = None  # Ambission or ProyectoModa
+
+
+@api_router.post("/sync/run")
+async def run_sync(request: SyncRunRequest):
+    """Trigger a sync run. Runs in background thread."""
+    from sync_engine import SyncService
+    started = datetime.now(timezone.utc)
+    try:
+        svc = SyncService()
+        result = await asyncio.to_thread(
+            svc.run_sync,
+            job_code=request.job_code,
+            mode=request.mode,
+            target=request.target or 'ALL',
+            company_key=request.company_key,
+        )
+        ended = datetime.now(timezone.utc)
+        return {
+            **result,
+            "started_at": started.isoformat(),
+            "ended_at": ended.isoformat(),
+            "duration_ms": int((ended - started).total_seconds() * 1000),
+        }
+    except Exception as e:
+        ended = datetime.now(timezone.utc)
+        return {
+            "success": False,
+            "message": str(e),
+            "results": [],
+            "started_at": started.isoformat(),
+            "ended_at": ended.isoformat(),
+            "duration_ms": int((ended - started).total_seconds() * 1000),
+        }
+
+
+@api_router.get("/sync/status")
+async def get_sync_status():
+    """Get sync jobs and recent logs."""
+    try:
+        with get_pg_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("""
+                    SELECT 
+                        job_code, enabled, schedule_type, 
+                        run_time::text as run_time, priority, mode,
+                        chunk_size, company_scope,
+                        last_run_at, last_success_at, last_cursor,
+                        last_error
+                    FROM odoo.sync_job
+                    ORDER BY priority
+                """)
+                jobs = cur.fetchall()
+                for job in jobs:
+                    for key in ['last_run_at', 'last_success_at', 'last_cursor']:
+                        if job[key] is not None:
+                            job[key] = job[key].isoformat()
+
+                cur.execute("""
+                    SELECT 
+                        id, job_code, company_key,
+                        started_at, ended_at, status,
+                        rows_upserted, rows_updated, error_message
+                    FROM odoo.sync_run_log
+                    ORDER BY started_at DESC
+                    LIMIT 50
+                """)
+                logs = cur.fetchall()
+                for log in logs:
+                    for key in ['started_at', 'ended_at']:
+                        if log[key] is not None:
+                            log[key] = log[key].isoformat()
+
+        return {"jobs": jobs, "logs": logs}
+    except Exception as e:
+        return {"jobs": [], "logs": [], "error": str(e)}
+
+
+@api_router.post("/sync/job/{job_code}/update")
+async def update_sync_job(job_code: str, enabled: Optional[bool] = None, mode: Optional[str] = None, chunk_size: Optional[int] = None):
+    """Update a sync job configuration."""
+    try:
+        updates = []
+        values = []
+        if enabled is not None:
+            updates.append("enabled = %s")
+            values.append(enabled)
+        if mode is not None:
+            updates.append("mode = %s")
+            values.append(mode)
+        if chunk_size is not None:
+            updates.append("chunk_size = %s")
+            values.append(chunk_size)
+        if not updates:
+            return {"success": False, "message": "No fields to update"}
+        values.append(job_code)
+        with get_pg_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"UPDATE odoo.sync_job SET {', '.join(updates)} WHERE job_code = %s", values)
+            conn.commit()
+        return {"success": True, "message": f"Job {job_code} actualizado"}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
 
 
 app.include_router(api_router)
