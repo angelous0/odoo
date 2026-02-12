@@ -124,15 +124,17 @@ class SyncService:
         return {}, None
 
     def _paginate(self, uid, pw, model, domain, fields, chunk, ctx=None):
+        """ID-based pagination (stable, no duplicates)."""
         all_recs = []
-        offset = 0
+        last_id = 0
         while True:
-            batch = self.client.search_read(self.odoo_db, uid, pw, model, domain, fields,
-                                            limit=chunk, offset=offset, context=ctx)
+            page_domain = domain + [('id', '>', last_id)]
+            batch = self.client.search_read(self.odoo_db, uid, pw, model, page_domain, fields,
+                                            limit=chunk, offset=0, order='id asc', context=ctx)
             if not batch:
                 break
             all_recs.extend(batch)
-            offset += chunk
+            last_id = max(r['id'] for r in batch)
             if len(batch) < chunk:
                 break
         logger.info(f"  Fetched {len(all_recs)} from {model}")
