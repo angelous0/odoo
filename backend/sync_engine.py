@@ -494,17 +494,20 @@ class SyncService:
         total += self._batch_exec(sql, "('GLOBAL',%s,%s,%s,%s,now())", vals)
         max_w = self._max_wd(recs, max_w)
 
-        # product.template.attribute.line
-        recs = self._paginate(uid, pw, 'product.template.attribute.line',
-                              self._inc_domain([], cursor, mode),
-                              ['id','product_tmpl_id','attribute_id','write_date'], cs)
-        vals = [(r['id'], xid(r.get('product_tmpl_id')), xid(r.get('attribute_id')), xdt(r.get('write_date'))) for r in recs]
-        sql = """INSERT INTO odoo.product_template_attribute_line (company_key,odoo_id,product_tmpl_id,attribute_id,odoo_write_date,synced_at)
-                 VALUES %s ON CONFLICT (company_key,odoo_id) DO UPDATE SET
-                 product_tmpl_id=EXCLUDED.product_tmpl_id,attribute_id=EXCLUDED.attribute_id,
-                 odoo_write_date=EXCLUDED.odoo_write_date,synced_at=now()"""
-        total += self._batch_exec(sql, "('GLOBAL',%s,%s,%s,%s,now())", vals)
-        max_w = self._max_wd(recs, max_w)
+        # product.template.attribute.line (may not exist in Odoo 10)
+        try:
+            recs = self._paginate(uid, pw, 'product.template.attribute.line',
+                                  self._inc_domain([], cursor, mode),
+                                  ['id','product_tmpl_id','attribute_id','write_date'], cs)
+            vals = [(r['id'], xid(r.get('product_tmpl_id')), xid(r.get('attribute_id')), xdt(r.get('write_date'))) for r in recs]
+            sql = """INSERT INTO odoo.product_template_attribute_line (company_key,odoo_id,product_tmpl_id,attribute_id,odoo_write_date,synced_at)
+                     VALUES %s ON CONFLICT (company_key,odoo_id) DO UPDATE SET
+                     product_tmpl_id=EXCLUDED.product_tmpl_id,attribute_id=EXCLUDED.attribute_id,
+                     odoo_write_date=EXCLUDED.odoo_write_date,synced_at=now()"""
+            total += self._batch_exec(sql, "('GLOBAL',%s,%s,%s,%s,now())", vals)
+            max_w = self._max_wd(recs, max_w)
+        except Exception as e:
+            logger.warning(f"product.template.attribute.line not available: {e}")
 
         return total, max_w
 
