@@ -379,6 +379,18 @@ ALTER TABLE odoo.pos_order
   ADD COLUMN IF NOT EXISTS odoo_create_uid INT,
   ADD COLUMN IF NOT EXISTS odoo_write_uid INT;
 
+-- res_company (audit)
+ALTER TABLE odoo.res_company
+  ADD COLUMN IF NOT EXISTS odoo_create_date TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS odoo_create_uid INT,
+  ADD COLUMN IF NOT EXISTS odoo_write_uid INT;
+
+-- res_users (audit)
+ALTER TABLE odoo.res_users
+  ADD COLUMN IF NOT EXISTS odoo_create_date TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS odoo_create_uid INT,
+  ADD COLUMN IF NOT EXISTS odoo_write_uid INT;
+
 -- índices audit
 CREATE INDEX IF NOT EXISTS idx_partner_create_date ON odoo.res_partner (company_key, odoo_create_date DESC);
 CREATE INDEX IF NOT EXISTS idx_ptemplate_create_date ON odoo.product_template (company_key, odoo_create_date DESC);
