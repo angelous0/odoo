@@ -518,24 +518,29 @@ class SyncService:
     def _sync_pos_orders(self, ck, mode, cursor, cs):
         uid, pw = self._auth(ck)
         ctx, cid = self._company_ctx(ck)
-        base = [('company_id','=',cid)] if cid else []
+        base = [('company_id', '=', cid)] if cid else []
         domain = self._inc_domain(base, cursor, mode)
 
-        order_fields = ['id','name','date_order','partner_id','user_id',
-                        'amount_total','amount_tax','state',
-                        'is_cancel','order_cancel','x_cliente_principal','reserva','reserva_use_id',
-                        'company_id','create_date','create_uid','write_date','write_uid']
+        order_fields = ['id', 'name', 'date_order', 'partner_id', 'user_id',
+                        'amount_total', 'amount_tax', 'state',
+                        'is_cancel', 'order_cancel', 'x_cliente_principal', 'reserva', 'reserva_use_id',
+                        'company_id', 'create_date', 'create_uid', 'write_date', 'write_uid']
 
         max_w = cursor
         total_orders = 0
         total_lines = 0
-        offset = 0
 
+        # ID-based pagination (stable, no duplicates)
+        last_id = 0
         while True:
-            orders = self.client.search_read(self.odoo_db, uid, pw, 'pos.order', domain, order_fields,
-                                             limit=cs, offset=offset, order='write_date asc', context=ctx)
+            page_domain = domain + [('id', '>', last_id)]
+            orders = self.client.search_read(self.odoo_db, uid, pw, 'pos.order', page_domain, order_fields,
+                                             limit=cs, offset=0, order='id asc', context=ctx)
             if not orders:
                 break
+
+            last_id = max(r['id'] for r in orders)
+            logger.info(f"  POS orders batch: {len(orders)} (last_id={last_id})")
 
             o_vals = [
                 (ck, r['id'], xtxt(r.get('name')), xdt(r.get('date_order')),
@@ -564,11 +569,11 @@ class SyncService:
             total_orders += self._batch_exec(o_sql, "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())", o_vals)
             max_w = self._max_wd(orders, max_w)
 
-            # Lines
+            # Lines for this batch
             oids = [r['id'] for r in orders]
             if oids:
-                lines = self._paginate(uid, pw, 'pos.order.line', [('order_id','in',oids)],
-                                       ['id','order_id','product_id','qty','price_unit','discount','price_subtotal','write_date'], cs)
+                lines = self._paginate(uid, pw, 'pos.order.line', [('order_id', 'in', oids)],
+                                       ['id', 'order_id', 'product_id', 'qty', 'price_unit', 'discount', 'price_subtotal', 'write_date'], cs)
                 l_vals = [
                     (ck, l['id'], xid(l.get('order_id')), xid(l.get('product_id')),
                      xnum(l.get('qty')), xnum(l.get('price_unit')),
@@ -584,7 +589,6 @@ class SyncService:
                            price_subtotal=EXCLUDED.price_subtotal,odoo_write_date=EXCLUDED.odoo_write_date,synced_at=now()"""
                 total_lines += self._batch_exec(l_sql, "(%s,%s,%s,%s,%s,%s,%s,%s,%s,now())", l_vals)
 
-            offset += cs
             if len(orders) < cs:
                 break
 
