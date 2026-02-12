@@ -1,50 +1,61 @@
 # Odoo ODS Schema Manager - PRD
 
 ## Problem Statement
-Create PostgreSQL schema "odoo" as ODS (Operational Data Store) to mirror Odoo ERP data for future CRM/Finance/Production use. Multi-company support, idempotent upserts, sync control infrastructure.
+Create PostgreSQL schema "odoo" as ODS (Operational Data Store) to mirror Odoo 10 ERP data via XML-RPC. Multi-company support, incremental sync by write_date, scheduled cron, batch upserts.
 
 ## Architecture
-- **Backend**: FastAPI + psycopg2 → PostgreSQL (external: 72.60.241.216:9090/datos)
+- **Backend**: FastAPI + psycopg2 → PostgreSQL (72.60.241.216:9090/datos)
+- **Sync**: XML-RPC client → Odoo 10 (ambission.app-gestion.net)
 - **Frontend**: React + Tailwind + shadcn/ui (dark theme, Spanish UI)
-- **Database**: PostgreSQL schema `odoo` with 13 tables, 3 views, 38 indexes
+- **Database**: PostgreSQL schema `odoo` with 13 tables, 3 views, 41 indexes
 
-## What's Implemented (2026-02-12)
-- **Schema `odoo`** created with pgcrypto extension
-- **Sync Control**: sync_job (6 base jobs seeded), sync_run_log
-- **Maestros**: res_company, res_users, res_partner (with custom x_cliente_principal fields)
-- **Productos**: product_template, product_product (with all custom fields: marca, tipo, tela, entalle, tel, hilo)
-- **Atributos**: product_attribute, product_attribute_value, product_template_attribute_line, product_attribute_value_product_product_rel
-- **POS**: pos_order, pos_order_line
-- **Vistas**: v_product_variant_flat (talla/color flatten), v_partner_account_map, v_pos_order_enriched
-- **38 indexes** for common queries
-- **Auto-migration on startup** + manual re-execute endpoint
-- **Dashboard UI**: Panel de Migración with metrics, tables list, sync jobs, indexes, and logs page
+## What's Implemented
 
-## User Personas
-- Database Administrators managing Odoo-to-PostgreSQL sync
-- Data Architects designing the ODS layer
+### Phase 1 (2026-02-12): Schema DDL
+- Schema `odoo` + pgcrypto extension
+- 13 tables: sync_job, sync_run_log, res_company, res_users, res_partner, product_template, product_product, product_attribute, product_attribute_value, product_template_attribute_line, product_attribute_value_product_product_rel, pos_order, pos_order_line
+- 3 views: v_product_variant_flat, v_partner_account_map, v_pos_order_enriched
+- 41 indexes, 6 seed sync_jobs
+- Audit columns: odoo_create_date, odoo_create_uid, odoo_write_uid on 6 tables
 
-## Core Requirements (Static)
-- Multi-empresa: company_key TEXT NOT NULL on all tables
-- PK: (company_key, odoo_id) on all entity tables
-- Idempotent: UNIQUE(company_key, odoo_id) + ON CONFLICT DO NOTHING for seeds
-- Common fields: odoo_id, odoo_write_date, synced_at
+### Phase 2 (2026-02-12): Sync Engine
+- Odoo 10 XML-RPC client with retry (3x) + backoff
+- SyncService: masters (GLOBAL) + POS (Ambission/ProyectoModa)
+- ID-based pagination (stable, no loops)
+- Batch upserts via execute_values (high performance)
+- Advisory lock to prevent concurrent syncs
+- Scheduler (every 60s, matches job run_time)
+- **1.25M+ rows synced**: 118K POS orders, 1M+ order lines, 11K partners, 32K products, 65K variant-attribute rels
+
+## Data Summary
+| Table | Rows |
+|---|---|
+| pos_order_line | 1,019,656 |
+| pos_order | 118,576 |
+| product_attribute_value_product_product_rel | 65,190 |
+| product_product | 32,657 |
+| res_partner | 11,592 |
+| product_template | 2,040 |
+| product_attribute_value | 432 |
+| res_users | 65 |
+| product_attribute | 15 |
+| res_company | 2 |
 
 ## Backlog
 ### P0 (Done)
-- [x] Schema creation
-- [x] All 13 tables with correct columns
-- [x] All indexes
-- [x] All 3 views
-- [x] Seed sync_jobs
-- [x] Admin panel UI
+- [x] Schema creation + DDL
+- [x] XML-RPC client + sync engine
+- [x] Batch upserts + ID pagination
+- [x] POS multi-company (Ambission + ProyectoModa)
+- [x] Scheduler
+- [x] Admin panel UI with sync buttons
 
 ### P1 (Next)
-- [ ] Actual Odoo API connector for data sync
-- [ ] Sync execution engine (run jobs)
-- [ ] CRM schema (phase 2)
+- [ ] CRM schema (phase 3)
+- [ ] Sync monitoring dashboard (charts, timelines)
+- [ ] Job schedule editing in UI
 
 ### P2
-- [ ] Schedule management UI (edit job schedules)
-- [ ] Real-time sync monitoring
-- [ ] Data quality checks/validation
+- [ ] Data quality validation
+- [ ] Webhook-triggered sync
+- [ ] Historical sync performance metrics
