@@ -134,7 +134,6 @@ class SyncService:
                 RETURNING id
             """, (job_code, company_key))
             log_id = cur.fetchone()[0]
-            conn.commit()
         return log_id
 
     def _finish_log(self, conn, log_id, status, rows_upserted=0, rows_updated=0, error_message=None):
@@ -145,7 +144,6 @@ class SyncService:
                 SET ended_at = now(), status = %s, rows_upserted = %s, rows_updated = %s, error_message = %s
                 WHERE id = %s
             """, (status, rows_upserted, rows_updated, error_message, log_id))
-            conn.commit()
 
     def _update_job_cursor(self, conn, job_code, last_cursor, success=True, error=None):
         """Update sync_job after a run."""
@@ -162,7 +160,6 @@ class SyncService:
                     SET last_run_at = now(), last_error = %s
                     WHERE job_code = %s
                 """, (str(error)[:500] if error else None, job_code))
-            conn.commit()
 
     def _get_job_cursor(self, conn, job_code):
         """Get last_cursor for a job."""
