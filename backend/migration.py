@@ -345,11 +345,49 @@ SELECT
     po.user_id,
     po.amount_total,
     po.state,
+    po.reserva,
+    po.reserva_use_id,
     (COALESCE(po.is_cancel, false) OR COALESCE(po.order_cancel, false)) AS is_cancelled
 FROM odoo.pos_order po
 LEFT JOIN odoo.v_partner_account_map map
     ON map.company_key = po.company_key
     AND map.contacto_partner_id = po.partner_id;
+
+-- H3) v_pos_line_full (enriched lines for validation)
+CREATE OR REPLACE VIEW odoo.v_pos_line_full AS
+SELECT
+    l.company_key,
+    o.date_order,
+    o.cuenta_partner_id,
+    o.contacto_partner_id,
+    o.user_id,
+    o.state,
+    o.is_cancelled,
+    o.reserva,
+    o.reserva_use_id,
+    l.order_id,
+    l.odoo_id           AS pos_order_line_id,
+    l.product_id,
+    l.qty,
+    l.price_unit,
+    l.discount,
+    l.price_subtotal,
+    vv.product_tmpl_id,
+    vv.barcode,
+    vv.talla,
+    vv.color,
+    pt.marca,
+    pt.tipo,
+    pt.tela,
+    pt.entalle,
+    pt.list_price
+FROM odoo.pos_order_line l
+JOIN odoo.v_pos_order_enriched o
+    ON o.company_key = l.company_key AND o.odoo_order_id = l.order_id
+LEFT JOIN odoo.v_product_variant_flat vv
+    ON vv.company_key = 'GLOBAL' AND vv.product_product_id = l.product_id
+LEFT JOIN odoo.product_template pt
+    ON pt.company_key = 'GLOBAL' AND pt.odoo_id = vv.product_tmpl_id;
 
 -- ============================================================
 -- ALTERACIONES: columnas audit (odoo_create_date, odoo_create_uid, odoo_write_uid)
@@ -458,4 +496,5 @@ ODOO_VIEWS = [
     "v_product_variant_flat",
     "v_partner_account_map",
     "v_pos_order_enriched",
+    "v_pos_line_full",
 ]
