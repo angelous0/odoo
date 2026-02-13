@@ -394,6 +394,36 @@ LEFT JOIN odoo.product_template pt
     ON pt.company_key = 'GLOBAL' AND pt.odoo_id = vv.product_tmpl_id;
 
 -- ============================================================
+-- I) STOCK VIEWS
+-- ============================================================
+
+-- I1) v_stock_by_product_location (internal active locations only)
+CREATE OR REPLACE VIEW odoo.v_stock_by_product_location AS
+SELECT
+    sq.product_id,
+    sq.location_id,
+    SUM(sq.qty)          AS qty,
+    SUM(sq.reserved_qty) AS reserved_qty,
+    SUM(sq.qty) - SUM(sq.reserved_qty) AS available_qty
+FROM odoo.stock_quant sq
+JOIN odoo.stock_location sl
+    ON sl.company_key = 'GLOBAL' AND sl.odoo_id = sq.location_id
+WHERE sq.company_key = 'GLOBAL'
+  AND sl.usage = 'internal'
+  AND COALESCE(sl.active, true) = true
+GROUP BY sq.product_id, sq.location_id;
+
+-- I2) v_stock_by_product (aggregated across all internal locations)
+CREATE OR REPLACE VIEW odoo.v_stock_by_product AS
+SELECT
+    product_id,
+    SUM(qty)          AS qty,
+    SUM(reserved_qty) AS reserved_qty,
+    SUM(available_qty) AS available_qty
+FROM odoo.v_stock_by_product_location
+GROUP BY product_id;
+
+-- ============================================================
 -- ALTERACIONES: columnas audit (odoo_create_date, odoo_create_uid, odoo_write_uid)
 -- ============================================================
 
@@ -464,12 +494,36 @@ CREATE INDEX IF NOT EXISTS idx_stock_location_complete_name ON odoo.stock_locati
 CREATE INDEX IF NOT EXISTS idx_stock_location_parent ON odoo.stock_location (company_key, location_id);
 
 -- ============================================================
+-- STOCK QUANTS
+-- ============================================================
+CREATE TABLE IF NOT EXISTS odoo.stock_quant (
+    company_key      TEXT NOT NULL,
+    odoo_id          INT NOT NULL,
+    product_id       INT NOT NULL,
+    location_id      INT NOT NULL,
+    qty              NUMERIC(16,4) NULL,
+    reserved_qty     NUMERIC(16,4) NULL,
+    in_date          TIMESTAMPTZ NULL,
+    odoo_create_date TIMESTAMPTZ NULL,
+    odoo_create_uid  INT NULL,
+    odoo_write_date  TIMESTAMPTZ NULL,
+    odoo_write_uid   INT NULL,
+    synced_at        TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY (company_key, odoo_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_stock_quant_product ON odoo.stock_quant (company_key, product_id);
+CREATE INDEX IF NOT EXISTS idx_stock_quant_location ON odoo.stock_quant (company_key, location_id);
+CREATE INDEX IF NOT EXISTS idx_stock_quant_prod_loc ON odoo.stock_quant (company_key, product_id, location_id);
+
+-- ============================================================
 -- SEED: Insertar jobs base (idempotente)
 -- ============================================================
 INSERT INTO odoo.sync_job (job_code, run_time, priority)
 VALUES
     ('RES_COMPANY',      '23:00', 10),
     ('STOCK_LOCATIONS',  '23:08', 15),
+    ('STOCK_QUANTS',     '23:15', 17),
     ('RES_USERS',        '23:02', 20),
     ('RES_PARTNER',      '23:05', 30),
     ('PRODUCTS',         '23:10', 40),
@@ -486,6 +540,7 @@ ODOO_TABLES = [
     "res_users",
     "res_partner",
     "stock_location",
+    "stock_quant",
     "product_template",
     "product_product",
     "product_attribute",
@@ -501,4 +556,6 @@ ODOO_VIEWS = [
     "v_partner_account_map",
     "v_pos_order_enriched",
     "v_pos_line_full",
+    "v_stock_by_product_location",
+    "v_stock_by_product",
 ]
