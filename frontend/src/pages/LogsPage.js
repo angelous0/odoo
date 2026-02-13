@@ -167,6 +167,11 @@ export default function LogsPage({ api }) {
                           <CheckCircle className="h-3 w-3 mr-1" />
                           OK
                         </Badge>
+                      ) : log.status === "RUNNING" ? (
+                        <Badge className="bg-yellow-500/20 text-yellow-400 border-yellow-500/30 text-[10px] font-mono animate-pulse">
+                          <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                          EN PROCESO
+                        </Badge>
                       ) : (
                         <Badge variant="destructive" className="text-[10px] font-mono">
                           <XCircle className="h-3 w-3 mr-1" />
