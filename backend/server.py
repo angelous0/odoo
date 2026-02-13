@@ -686,6 +686,7 @@ async def get_health():
                     ("product_template", "company_key='GLOBAL'"),
                     ("product_product", "company_key='GLOBAL'"),
                     ("stock_location", "company_key='GLOBAL'"),
+                    ("stock_quant", "company_key='GLOBAL'"),
                     ("pos_order", "1=1"),
                     ("pos_order_line", "1=1"),
                 ]:
