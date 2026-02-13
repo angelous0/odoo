@@ -95,6 +95,7 @@ export default function LogsPage({ api }) {
             <SelectContent>
               <SelectItem value="ALL">Todos</SelectItem>
               <SelectItem value="OK">OK</SelectItem>
+              <SelectItem value="RUNNING">En Proceso</SelectItem>
               <SelectItem value="ERROR">ERROR</SelectItem>
             </SelectContent>
           </Select>
