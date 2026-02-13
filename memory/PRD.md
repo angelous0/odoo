@@ -1,61 +1,48 @@
-# Odoo ODS Schema Manager - PRD
+# Odoo ODS - Operational Data Store
 
-## Problem Statement
-Create PostgreSQL schema "odoo" as ODS (Operational Data Store) to mirror Odoo 10 ERP data via XML-RPC. Multi-company support, incremental sync by write_date, scheduled cron, batch upserts.
+## Problema Original
+Crear un Operational Data Store (ODS) en PostgreSQL para replicar datos de Odoo 10 vía XML-RPC. El objetivo es crear un espejo de datos de Odoo en un esquema `odoo` para alimentar futuros sistemas de CRM, Finanzas y Producción.
 
-## Architecture
-- **Backend**: FastAPI + psycopg2 → PostgreSQL (72.60.241.216:9090/datos)
-- **Sync**: XML-RPC client → Odoo 10 (ambission.app-gestion.net)
-- **Frontend**: React + Tailwind + shadcn/ui (dark theme, Spanish UI)
-- **Database**: PostgreSQL schema `odoo` with 13 tables, 3 views, 41 indexes
+## Arquitectura
+- **Backend:** FastAPI + PostgreSQL (psycopg2-binary) + XML-RPC
+- **Frontend:** React + TailwindCSS + Shadcn/UI
+- **Datos:** Modelo multi-empresa (`company_key`): maestros=GLOBAL, POS=por empresa
 
-## What's Implemented
+## Fases Completadas
 
-### Phase 1 (2026-02-12): Schema DDL
-- Schema `odoo` + pgcrypto extension
-- 13 tables: sync_job, sync_run_log, res_company, res_users, res_partner, product_template, product_product, product_attribute, product_attribute_value, product_template_attribute_line, product_attribute_value_product_product_rel, pos_order, pos_order_line
-- 3 views: v_product_variant_flat, v_partner_account_map, v_pos_order_enriched
-- 41 indexes, 6 seed sync_jobs
-- Audit columns: odoo_create_date, odoo_create_uid, odoo_write_uid on 6 tables
+### Fase 1 - Schema & Vistas ✅
+Schema `odoo` con tablas: res_company, res_users, res_partner, product_template, product_product, atributos, pos_order, pos_order_line. Vistas: v_product_variant_flat, v_partner_account_map, v_pos_order_enriched, v_pos_line_full.
 
-### Phase 2 (2026-02-12): Sync Engine
-- Odoo 10 XML-RPC client with retry (3x) + backoff
-- SyncService: masters (GLOBAL) + POS (Ambission/ProyectoModa)
-- ID-based pagination (stable, no loops)
-- Batch upserts via execute_values (high performance)
-- Advisory lock to prevent concurrent syncs
-- Scheduler (every 60s, matches job run_time)
-- **1.25M+ rows synced**: 118K POS orders, 1M+ order lines, 11K partners, 32K products, 65K variant-attribute rels
+### Fase 2 - Sync Engine ✅  
+Motor de sincronización incremental vía XML-RPC (write_date cursor). Batch upserts con execute_values. Paginación por ID. Advisory lock. Scheduler. +1.25M registros sincronizados.
 
-## Data Summary
-| Table | Rows |
-|---|---|
-| pos_order_line | 1,019,656 |
-| pos_order | 118,576 |
-| product_attribute_value_product_product_rel | 65,190 |
-| product_product | 32,657 |
-| res_partner | 11,592 |
-| product_template | 2,040 |
-| product_attribute_value | 432 |
-| res_users | 65 |
-| product_attribute | 15 |
-| res_company | 2 |
+### Fase 3 - Stock Locations ✅
+Tabla odoo.stock_location + sync. 52 ubicaciones sincronizadas.
+
+### Fase 4 - UI de Validación ✅
+Dashboard, Historial, Panel de control, Locations, POS Lines Full, Health.
+
+### Fase 5 - Stock Actual (stock.quant) ✅ [13-Feb-2026]
+- **Tabla** `odoo.stock_quant`: PK(company_key, odoo_id), campos qty, reserved_qty, in_date, audit fields
+- **Sync** `STOCK_QUANTS`: chunk_size=5000, company_scope=GLOBAL. Detección automática de campo qty/quantity y reserved_quantity. Inserción progresiva por lotes. **1,042,549 registros sincronizados.**
+- **Vistas SQL**:
+  - `v_stock_by_product_location`: stock por producto+ubicación (solo internal/active). 16,811 filas.
+  - `v_stock_by_product`: stock agregado por producto. 8,046 productos con stock.
+- **UI**: 3 páginas nuevas:
+  - `/stock-quants`: tabla paginada con filtros product_id/location_id
+  - `/stock-by-product`: stock disponible por producto con toggle "Solo disponible"
+  - `/stock-by-location`: stock por tienda con nombre de tienda vía lookup
+
+## Endpoints API
+- `POST /api/sync/run` - Ejecutar sync manual
+- `GET /api/sync/status` - Estado de jobs y logs
+- `GET /api/health` - Salud del sistema (incluye stock_quant)
+- `GET /api/stock-quants` - Quants paginados con filtros
+- `GET /api/stock-by-product` - Stock agregado por producto
+- `GET /api/stock-by-location` - Stock por producto+tienda
+- `GET /api/pos-lines-full` - Líneas POS enriquecidas
+- `GET /api/locations` - Ubicaciones
+- `GET /api/sync-logs` - Historial de sync
 
 ## Backlog
-### P0 (Done)
-- [x] Schema creation + DDL
-- [x] XML-RPC client + sync engine
-- [x] Batch upserts + ID pagination
-- [x] POS multi-company (Ambission + ProyectoModa)
-- [x] Scheduler
-- [x] Admin panel UI with sync buttons
-
-### P1 (Next)
-- [ ] CRM schema (phase 3)
-- [ ] Sync monitoring dashboard (charts, timelines)
-- [ ] Job schedule editing in UI
-
-### P2
-- [ ] Data quality validation
-- [ ] Webhook-triggered sync
-- [ ] Historical sync performance metrics
+No hay tareas pendientes adicionales.
