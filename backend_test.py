@@ -468,6 +468,17 @@ def main():
     # Test migration execution (idempotent)
     tester.test_execute_migration()
     
+    print("\n" + "="*50)
+    print("TESTING VALIDATION ENDPOINTS")
+    print("="*50)
+    
+    # Test new validation endpoints
+    tester.test_stock_locations()
+    tester.test_stock_locations_search()
+    tester.test_pos_lines_full()
+    tester.test_pos_lines_full_filters()
+    tester.test_health_endpoint()
+    
     # Re-test status after migration
     print("\n--- Re-testing status after migration ---")
     tester.test_migration_status()
