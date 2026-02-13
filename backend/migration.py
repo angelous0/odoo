@@ -531,8 +531,9 @@ VALUES
 ON CONFLICT (job_code) DO NOTHING;
 
 INSERT INTO odoo.sync_job (job_code, enabled, schedule_type, run_time, priority, mode, chunk_size, company_scope)
-VALUES ('STOCK_QUANTS', true, 'DAILY', '23:15', 17, 'INCREMENTAL', 5000, 'GLOBAL')
+VALUES ('STOCK_QUANTS', true, 'HOURLY', '23:15', 17, 'INCREMENTAL', 5000, 'GLOBAL')
 ON CONFLICT (job_code) DO UPDATE SET
+    schedule_type = 'HOURLY',
     chunk_size = 5000,
     company_scope = 'GLOBAL';
 """
