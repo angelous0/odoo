@@ -50,6 +50,17 @@ def xtxt(val):
     return str(val)
 
 
+def xm2o_name(val):
+    """Extract display name from many2one field [id, 'name'] or False."""
+    if val is False or val is None:
+        return None
+    if isinstance(val, (list, tuple)) and len(val) >= 2:
+        return str(val[1])
+    if isinstance(val, str):
+        return val
+    return None
+
+
 def xnum(val):
     """Extract numeric value."""
     if val is False or val is None:
