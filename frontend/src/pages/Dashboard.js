@@ -162,23 +162,23 @@ export default function Dashboard({ connection, migrationStatus, onMigrate, onRe
 
   const handleSync = async (target, label, company_key = null) => {
     setSyncing(label);
-    toast.info(`Iniciando sync: ${label}...`);
+    const toastId = toast.loading(`${label} en progreso... esto puede tardar varios minutos`, { duration: Infinity });
     try {
       const body = { target };
       if (company_key) body.company_key = company_key;
-      const res = await axios.post(`${api}/sync/run`, body);
+      const res = await axios.post(`${api}/sync/run`, body, { timeout: 600000 });
       const d = res.data;
       if (d.success) {
         const okCount = d.results.filter(r => r.status === 'OK').length;
         const errCount = d.results.filter(r => r.status === 'ERROR').length;
         const totalRows = d.results.reduce((a, r) => a + (r.rows || 0), 0);
-        toast.success(`${label}: ${okCount} OK, ${errCount} errores, ${totalRows.toLocaleString()} filas en ${(d.duration_ms / 1000).toFixed(1)}s`);
+        toast.success(`${label}: ${okCount} OK, ${errCount} err, ${totalRows.toLocaleString()} filas en ${(d.duration_ms / 1000).toFixed(1)}s`, { id: toastId });
       } else {
-        toast.error(`Error: ${d.message}`);
+        toast.error(d.message, { id: toastId });
       }
       await fetchData();
     } catch (e) {
-      toast.error(`Error: ${e.message}`);
+      toast.error(`Error: ${e.message}`, { id: toastId });
     } finally {
       setSyncing(null);
     }
