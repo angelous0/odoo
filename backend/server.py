@@ -441,18 +441,29 @@ async def update_sync_job(job_code: str, enabled: Optional[bool] = None, mode: O
 
 
 @api_router.get("/stock-locations")
-async def get_stock_locations():
-    """Get all stock locations (GLOBAL)."""
+async def get_stock_locations(search: Optional[str] = None):
+    """Get all stock locations (GLOBAL) with optional search."""
     try:
         with get_pg_conn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("""
-                    SELECT odoo_id, x_nombre, name, complete_name, usage, active,
-                           location_id, company_id, odoo_write_date
-                    FROM odoo.stock_location
-                    WHERE company_key = 'GLOBAL'
-                    ORDER BY complete_name
-                """)
+                if search and search.strip():
+                    s = f"%{search.strip()}%"
+                    cur.execute("""
+                        SELECT odoo_id, x_nombre, name, complete_name, usage, active,
+                               location_id, company_id, odoo_write_date
+                        FROM odoo.stock_location
+                        WHERE company_key = 'GLOBAL'
+                          AND (x_nombre ILIKE %s OR name ILIKE %s OR complete_name ILIKE %s)
+                        ORDER BY odoo_write_date DESC NULLS LAST
+                    """, (s, s, s))
+                else:
+                    cur.execute("""
+                        SELECT odoo_id, x_nombre, name, complete_name, usage, active,
+                               location_id, company_id, odoo_write_date
+                        FROM odoo.stock_location
+                        WHERE company_key = 'GLOBAL'
+                        ORDER BY odoo_write_date DESC NULLS LAST
+                    """)
                 locations = cur.fetchall()
                 for loc in locations:
                     if loc['odoo_write_date'] is not None:
@@ -460,6 +471,161 @@ async def get_stock_locations():
         return {"locations": locations}
     except Exception as e:
         return {"locations": [], "error": str(e)}
+
+
+@api_router.get("/pos-lines-full")
+async def get_pos_lines_full(
+    company_key: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    is_cancelled: Optional[bool] = None,
+    marca: Optional[str] = None,
+    tipo: Optional[str] = None,
+    tela: Optional[str] = None,
+    talla: Optional[str] = None,
+    color: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 50,
+):
+    """Query v_pos_line_full with filters and pagination."""
+    try:
+        with get_pg_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                conditions = ["company_key IN ('Ambission','ProyectoModa')"]
+                params = []
+
+                if company_key:
+                    conditions.append("company_key = %s")
+                    params.append(company_key)
+                if date_from:
+                    conditions.append("date_order >= %s")
+                    params.append(date_from)
+                if date_to:
+                    conditions.append("date_order <= %s")
+                    params.append(date_to)
+                if is_cancelled is not None:
+                    conditions.append("is_cancelled = %s")
+                    params.append(is_cancelled)
+                if marca:
+                    conditions.append("marca ILIKE %s")
+                    params.append(f"%{marca}%")
+                if tipo:
+                    conditions.append("tipo ILIKE %s")
+                    params.append(f"%{tipo}%")
+                if tela:
+                    conditions.append("tela ILIKE %s")
+                    params.append(f"%{tela}%")
+                if talla:
+                    conditions.append("talla ILIKE %s")
+                    params.append(f"%{talla}%")
+                if color:
+                    conditions.append("color ILIKE %s")
+                    params.append(f"%{color}%")
+
+                where = " AND ".join(conditions)
+                offset = (page - 1) * page_size
+
+                # Count
+                cur.execute(f"SELECT count(*) as total FROM odoo.v_pos_line_full WHERE {where}", params)
+                total = cur.fetchone()["total"]
+
+                # Data
+                cur.execute(f"""
+                    SELECT company_key, date_order, cuenta_partner_id, contacto_partner_id, user_id,
+                           state, is_cancelled, reserva, reserva_use_id,
+                           order_id, pos_order_line_id, product_id, qty, price_unit, discount, price_subtotal,
+                           product_tmpl_id, barcode, talla, color, marca, tipo, tela, entalle, list_price
+                    FROM odoo.v_pos_line_full
+                    WHERE {where}
+                    ORDER BY date_order DESC NULLS LAST
+                    LIMIT %s OFFSET %s
+                """, params + [page_size, offset])
+                rows = cur.fetchall()
+                for r in rows:
+                    if r['date_order'] is not None:
+                        r['date_order'] = r['date_order'].isoformat()
+                    for k in ('qty', 'price_unit', 'discount', 'price_subtotal', 'list_price'):
+                        if r[k] is not None:
+                            r[k] = float(r[k])
+
+        return {
+            "rows": rows,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": (total + page_size - 1) // page_size if total > 0 else 0,
+        }
+    except Exception as e:
+        return {"rows": [], "total": 0, "page": 1, "page_size": page_size, "total_pages": 0, "error": str(e)}
+
+
+@api_router.get("/health")
+async def get_health():
+    """Health check: table counts, last dates, integrity, errors."""
+    try:
+        with get_pg_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                # Table counts + max write_date
+                tables_health = []
+                for tbl, ck_filter in [
+                    ("res_partner", "company_key='GLOBAL'"),
+                    ("product_template", "company_key='GLOBAL'"),
+                    ("product_product", "company_key='GLOBAL'"),
+                    ("stock_location", "company_key='GLOBAL'"),
+                    ("pos_order", "1=1"),
+                    ("pos_order_line", "1=1"),
+                ]:
+                    cur.execute(f"SELECT count(*) as cnt, max(odoo_write_date) as max_wd FROM odoo.{tbl} WHERE {ck_filter}")
+                    r = cur.fetchone()
+                    tables_health.append({
+                        "table": tbl,
+                        "count": r["cnt"],
+                        "max_write_date": r["max_wd"].isoformat() if r["max_wd"] else None,
+                    })
+
+                # POS by company
+                cur.execute("""
+                    SELECT company_key, count(*) as cnt, max(odoo_write_date) as max_wd
+                    FROM odoo.pos_order GROUP BY company_key ORDER BY 1
+                """)
+                pos_by_company = []
+                for r in cur.fetchall():
+                    pos_by_company.append({
+                        "company_key": r["company_key"],
+                        "count": r["cnt"],
+                        "max_write_date": r["max_wd"].isoformat() if r["max_wd"] else None,
+                    })
+
+                # Integrity: lines without header
+                cur.execute("""
+                    SELECT count(*) as orphan_lines
+                    FROM odoo.pos_order_line l
+                    LEFT JOIN odoo.pos_order o
+                        ON o.company_key = l.company_key AND o.odoo_id = l.order_id
+                    WHERE o.odoo_id IS NULL
+                """)
+                orphan_lines = cur.fetchone()["orphan_lines"]
+
+                # Last errors
+                cur.execute("""
+                    SELECT id, job_code, company_key, started_at, ended_at, error_message
+                    FROM odoo.sync_run_log WHERE status='ERROR'
+                    ORDER BY started_at DESC LIMIT 10
+                """)
+                errors = cur.fetchall()
+                for e in errors:
+                    for k in ('started_at', 'ended_at'):
+                        if e[k] is not None:
+                            e[k] = e[k].isoformat()
+
+        return {
+            "tables": tables_health,
+            "pos_by_company": pos_by_company,
+            "orphan_lines": orphan_lines,
+            "recent_errors": errors,
+        }
+    except Exception as e:
+        return {"tables": [], "pos_by_company": [], "orphan_lines": -1, "recent_errors": [], "error": str(e)}
 
 
 app.include_router(api_router)
