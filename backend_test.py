@@ -242,6 +242,189 @@ class OdooODSAPITester:
             check_response=check_migration
         )
 
+    def test_stock_locations(self):
+        """Test stock-locations endpoint"""
+        def check_locations(response_data):
+            if 'locations' not in response_data:
+                return "Missing 'locations' key in response"
+            
+            locations = response_data['locations']
+            if len(locations) < 52:  # Expected ~52 locations
+                return f"Expected ~52 locations, got {len(locations)}"
+                
+            # Check location structure
+            if locations:
+                loc = locations[0]
+                required_fields = ['odoo_id', 'name', 'complete_name', 'usage', 'active', 'odoo_write_date']
+                for field in required_fields:
+                    if field not in loc:
+                        return f"Location missing required field: {field}"
+                        
+                # Check if ordered by write_date desc (if dates available)
+                if len(locations) >= 2 and locations[0].get('odoo_write_date') and locations[1].get('odoo_write_date'):
+                    if locations[0]['odoo_write_date'] < locations[1]['odoo_write_date']:
+                        return "Locations not ordered by odoo_write_date DESC"
+            
+            print(f"   Found {len(locations)} stock locations")
+            print(f"   First location: {locations[0].get('name', 'N/A') if locations else 'None'}")
+            return True
+        
+        return self.run_test(
+            "Stock Locations - List All",
+            "GET",
+            "stock-locations",
+            200,
+            check_response=check_locations
+        )
+
+    def test_stock_locations_search(self):
+        """Test stock-locations search functionality"""
+        def check_search(response_data):
+            if 'locations' not in response_data:
+                return "Missing 'locations' key in response"
+            
+            locations = response_data['locations']
+            # With search=AP, should get some results but less than total
+            if len(locations) == 0:
+                return "Search for 'AP' returned no results - expected some matches"
+            
+            # Check that returned locations contain 'AP' in relevant fields
+            for loc in locations[:3]:  # Check first few
+                name_match = 'AP' in (loc.get('name') or '').upper()
+                x_nombre_match = 'AP' in (loc.get('x_nombre') or '').upper() 
+                complete_name_match = 'AP' in (loc.get('complete_name') or '').upper()
+                
+                if not (name_match or x_nombre_match or complete_name_match):
+                    return f"Location {loc.get('name')} doesn't contain 'AP' in searchable fields"
+            
+            print(f"   Search 'AP' returned {len(locations)} locations")
+            return True
+        
+        return self.run_test(
+            "Stock Locations - Search by 'AP'",
+            "GET",
+            "stock-locations?search=AP",
+            200,
+            check_response=check_search
+        )
+
+    def test_pos_lines_full(self):
+        """Test pos-lines-full endpoint with pagination"""
+        def check_pos_lines(response_data):
+            required_fields = ['rows', 'total', 'page', 'page_size', 'total_pages']
+            for field in required_fields:
+                if field not in response_data:
+                    return f"Missing required field: {field}"
+            
+            if response_data['page'] != 1 or response_data['page_size'] != 50:
+                return f"Expected page=1, page_size=50, got page={response_data['page']}, page_size={response_data['page_size']}"
+                
+            rows = response_data['rows']
+            total = response_data['total']
+            
+            if total > 0 and len(rows) == 0:
+                return f"Total={total} but rows is empty"
+                
+            if len(rows) > 50:
+                return f"Expected max 50 rows per page, got {len(rows)}"
+            
+            # Check row structure if data exists
+            if rows:
+                row = rows[0]
+                expected_fields = ['company_key', 'date_order', 'state', 'order_id', 'pos_order_line_id', 
+                                 'product_id', 'qty', 'price_unit', 'discount', 'price_subtotal', 
+                                 'talla', 'color', 'marca', 'tipo', 'tela']
+                for field in expected_fields:
+                    if field not in row:
+                        return f"POS line row missing field: {field}"
+            
+            print(f"   Found {total} total POS lines, showing {len(rows)} on page 1")
+            print(f"   Total pages: {response_data['total_pages']}")
+            return True
+        
+        return self.run_test(
+            "POS Lines Full - Paginated List",
+            "GET",
+            "pos-lines-full?page=1&page_size=50&date_from=2026-02-01",
+            200,
+            check_response=check_pos_lines
+        )
+
+    def test_pos_lines_full_filters(self):
+        """Test pos-lines-full with company filter"""
+        def check_filtered_lines(response_data):
+            if 'rows' not in response_data:
+                return "Missing 'rows' key in response"
+                
+            rows = response_data['rows']
+            
+            # Check that all returned rows have company_key = Ambission
+            for row in rows:
+                if row.get('company_key') != 'Ambission':
+                    return f"Expected company_key=Ambission, got {row.get('company_key')}"
+            
+            print(f"   Filtered by company=Ambission: {len(rows)} rows")
+            return True
+        
+        return self.run_test(
+            "POS Lines Full - Filter by Company",
+            "GET", 
+            "pos-lines-full?company_key=Ambission",
+            200,
+            check_response=check_filtered_lines
+        )
+
+    def test_health_endpoint(self):
+        """Test health endpoint for system monitoring"""
+        def check_health(response_data):
+            required_sections = ['tables', 'pos_by_company', 'orphan_lines', 'recent_errors']
+            for section in required_sections:
+                if section not in response_data:
+                    return f"Missing health section: {section}"
+            
+            # Check tables section
+            tables = response_data['tables']
+            expected_tables = ['res_partner', 'product_template', 'product_product', 
+                             'stock_location', 'pos_order', 'pos_order_line']
+            
+            if len(tables) != 6:
+                return f"Expected 6 table health checks, got {len(tables)}"
+            
+            table_names = [t.get('table') for t in tables]
+            for expected in expected_tables:
+                if expected not in table_names:
+                    return f"Missing health check for table: {expected}"
+            
+            # Check pos_by_company section
+            pos_by_company = response_data['pos_by_company']
+            if len(pos_by_company) < 2:
+                return f"Expected POS data for at least 2 companies, got {len(pos_by_company)}"
+                
+            company_keys = [p.get('company_key') for p in pos_by_company]
+            if 'Ambission' not in company_keys or 'ProyectoModa' not in company_keys:
+                return f"Expected Ambission and ProyectoModa companies, got: {company_keys}"
+            
+            # Check orphan_lines
+            orphan_lines = response_data['orphan_lines']
+            if orphan_lines != 0:
+                return f"Expected 0 orphan lines for healthy system, got {orphan_lines}"
+            
+            # Check recent_errors structure
+            recent_errors = response_data['recent_errors']
+            print(f"   Tables health: {len(tables)} tables checked")
+            print(f"   POS by company: {len(pos_by_company)} companies")
+            print(f"   Orphan lines: {orphan_lines} (should be 0)")
+            print(f"   Recent errors: {len(recent_errors)} errors")
+            return True
+        
+        return self.run_test(
+            "Health Check - System Monitoring",
+            "GET",
+            "health",
+            200,
+            check_response=check_health
+        )
+
     def test_root_endpoint(self):
         """Test root API endpoint"""
         def check_root(response_data):
