@@ -90,6 +90,9 @@ export default function StockByLocationPage({ api }) {
               <TableHeader>
                 <TableRow>
                   <TableHead className="font-mono text-xs text-right">product_id</TableHead>
+                  <TableHead className="font-mono text-xs">Producto</TableHead>
+                  <TableHead className="font-mono text-xs">Tipo</TableHead>
+                  <TableHead className="font-mono text-xs">Marca</TableHead>
                   <TableHead className="font-mono text-xs text-right">location_id</TableHead>
                   <TableHead className="font-mono text-xs">Tienda</TableHead>
                   <TableHead className="font-mono text-xs text-right">qty</TableHead>
@@ -101,6 +104,9 @@ export default function StockByLocationPage({ api }) {
                 {rows.map((r, i) => (
                   <TableRow key={i} data-testid={`stock-loc-row-${i}`}>
                     <TableCell className="text-right font-mono text-sm text-primary">{r.product_id}</TableCell>
+                    <TableCell className="text-sm font-medium truncate max-w-[200px]">{r.product_name || "—"}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground">{r.tipo || "—"}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground">{r.marca || "—"}</TableCell>
                     <TableCell className="text-right font-mono text-sm text-muted-foreground">{r.location_id}</TableCell>
                     <TableCell className="text-sm font-medium">{r.location_name || r.location_raw_name || "—"}</TableCell>
                     <TableCell className="text-right font-mono text-sm">{fmtNum(r.qty)}</TableCell>

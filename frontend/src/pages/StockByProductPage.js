@@ -79,6 +79,9 @@ export default function StockByProductPage({ api }) {
               <TableHeader>
                 <TableRow>
                   <TableHead className="font-mono text-xs text-right">product_id</TableHead>
+                  <TableHead className="font-mono text-xs">Producto</TableHead>
+                  <TableHead className="font-mono text-xs">Tipo</TableHead>
+                  <TableHead className="font-mono text-xs">Marca</TableHead>
                   <TableHead className="font-mono text-xs text-right">qty</TableHead>
                   <TableHead className="font-mono text-xs text-right">reserved_qty</TableHead>
                   <TableHead className="font-mono text-xs text-right">available_qty</TableHead>
@@ -88,6 +91,9 @@ export default function StockByProductPage({ api }) {
                 {rows.map((r) => (
                   <TableRow key={r.product_id} data-testid={`stock-prod-row-${r.product_id}`}>
                     <TableCell className="text-right font-mono text-sm text-primary">{r.product_id}</TableCell>
+                    <TableCell className="text-sm font-medium truncate max-w-[200px]">{r.product_name || "—"}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground">{r.tipo || "—"}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground">{r.marca || "—"}</TableCell>
                     <TableCell className="text-right font-mono text-sm">{fmtNum(r.qty)}</TableCell>
                     <TableCell className="text-right font-mono text-sm text-muted-foreground">{fmtNum(r.reserved_qty)}</TableCell>
                     <TableCell className="text-right font-mono text-sm font-medium">
