@@ -361,25 +361,34 @@ class SyncService:
         uid, pw = self._auth('Ambission')
         domain = self._inc_domain([], cursor, mode)
 
-        # Odoo 10: field is 'qty', no 'reserved_quantity'
-        # Try 'quantity' (Odoo 12+) first, fallback to 'qty'
+        # Detect the correct qty field name: try 'qty' first (Odoo 10), then 'quantity' (Odoo 12+)
         qty_field = 'qty'
         has_reserved = False
         try:
             test = self.client.search_read(self.odoo_db, uid, pw, 'stock.quant',
-                                           [('id', '>', 0)], ['id', 'quantity'], limit=1)
-            qty_field = 'quantity'
-            logger.info("stock.quant uses 'quantity' field")
-        except Exception:
-            logger.info("stock.quant uses 'qty' field (Odoo 10)")
+                                           [], ['id', 'qty', 'quantity'], limit=5)
+            if test:
+                # Check which field has actual non-False data
+                has_qty_data = any(r.get('qty') not in (False, None) for r in test)
+                has_quantity_data = any(r.get('quantity') not in (False, None) for r in test)
+                if has_qty_data:
+                    qty_field = 'qty'
+                elif has_quantity_data:
+                    qty_field = 'quantity'
+                logger.info(f"stock.quant qty field: '{qty_field}' (qty_data={has_qty_data}, quantity_data={has_quantity_data})")
+        except Exception as e:
+            logger.info(f"stock.quant field detection fallback to 'qty': {e}")
 
         try:
             test = self.client.search_read(self.odoo_db, uid, pw, 'stock.quant',
-                                           [('id', '>', 0)], ['id', 'reserved_quantity'], limit=1)
-            has_reserved = True
-            logger.info("stock.quant has 'reserved_quantity' field")
+                                           [], ['id', 'reserved_quantity'], limit=1)
+            if test and test[0].get('reserved_quantity') not in (False, None):
+                has_reserved = True
+                logger.info("stock.quant has 'reserved_quantity' with data")
+            else:
+                logger.info("stock.quant 'reserved_quantity' exists but no data, defaulting to 0")
         except Exception:
-            logger.info("stock.quant has no 'reserved_quantity' (Odoo 10), defaulting to 0")
+            logger.info("stock.quant has no 'reserved_quantity', defaulting to 0")
 
         fields = ['id', 'product_id', 'location_id', qty_field,
                   'in_date', 'create_date', 'create_uid', 'write_date', 'write_uid']
