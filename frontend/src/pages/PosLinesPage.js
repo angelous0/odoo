@@ -216,6 +216,8 @@ export default function PosLinesPage({ api }) {
                   <TableHead className="font-mono text-[10px]">Color</TableHead>
                   <TableHead className="font-mono text-[10px]">Marca</TableHead>
                   <TableHead className="font-mono text-[10px]">Tipo</TableHead>
+                  <TableHead className="font-mono text-[10px]">Tela</TableHead>
+                  <TableHead className="font-mono text-[10px]">Entalle</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -245,6 +247,8 @@ export default function PosLinesPage({ api }) {
                     <TableCell className="text-xs">{r.color || "—"}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">{r.marca || "—"}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">{r.tipo || "—"}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{r.tela || "—"}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{r.entalle || "—"}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
