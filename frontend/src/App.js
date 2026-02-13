@@ -6,7 +6,9 @@ import { Toaster, toast } from "sonner";
 import Dashboard from "@/pages/Dashboard";
 import LogsPage from "@/pages/LogsPage";
 import LocationsPage from "@/pages/LocationsPage";
-import { Database, Activity, MapPin } from "lucide-react";
+import PosLinesPage from "@/pages/PosLinesPage";
+import HealthPage from "@/pages/HealthPage";
+import { Database } from "lucide-react";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
@@ -110,6 +112,32 @@ function App() {
                   >
                     Locations
                   </NavLink>
+                  <NavLink
+                    to="/pos-lines"
+                    className={({ isActive }) =>
+                      `px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                        isActive
+                          ? "bg-secondary text-foreground"
+                          : "text-muted-foreground hover:text-foreground hover:bg-secondary/50"
+                      }`
+                    }
+                    data-testid="nav-pos-lines"
+                  >
+                    POS Lines
+                  </NavLink>
+                  <NavLink
+                    to="/health"
+                    className={({ isActive }) =>
+                      `px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                        isActive
+                          ? "bg-secondary text-foreground"
+                          : "text-muted-foreground hover:text-foreground hover:bg-secondary/50"
+                      }`
+                    }
+                    data-testid="nav-health"
+                  >
+                    Health
+                  </NavLink>
                 </div>
               </div>
               <div className="flex items-center gap-3" data-testid="connection-status">
@@ -152,6 +180,8 @@ function App() {
             />
             <Route path="/logs" element={<LogsPage api={API} />} />
             <Route path="/locations" element={<LocationsPage api={API} />} />
+            <Route path="/pos-lines" element={<PosLinesPage api={API} />} />
+            <Route path="/health" element={<HealthPage api={API} />} />
           </Routes>
         </main>
       </BrowserRouter>
