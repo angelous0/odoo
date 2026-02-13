@@ -497,11 +497,43 @@ class SyncService:
 
         base = [('sale_ok','=',True),('purchase_ok','=',False),('active','=',True)]
         domain = self._inc_domain(base, cursor, mode)
-        # x_marca/x_tipo are char fields; tela/entalle/hilo are many2one (return [id,name])
+        # x_marca is char; x_tipo is many2one; tela/entalle/hilo are many2one
         tmpl_fields = ['id','name','active','sale_ok','purchase_ok','list_price',
                         'x_marca','x_tipo','tela','entalle','hilo',
                         'create_date','create_uid','write_date','write_uid']
         recs = self._paginate(uid, pw, 'product.template', domain, tmpl_fields, cs)
+
+        # Lookup x_tipo_resumen from related model
+        tipo_ids = set()
+        for r in recs:
+            tid = xid(r.get('x_tipo'))
+            if tid:
+                tipo_ids.add(tid)
+        tipo_map = {}  # id -> x_tipo_resumen or name
+        if tipo_ids:
+            try:
+                tipo_recs = self.client.read(self.odoo_db, uid, pw, 'product.tipo',
+                                             list(tipo_ids), fields=['id', 'x_tipo_resumen', 'name'])
+                for t in tipo_recs:
+                    resumen = t.get('x_tipo_resumen')
+                    name = t.get('name') or ''
+                    if resumen and resumen is not False:
+                        tipo_map[t['id']] = resumen
+                    else:
+                        tipo_map[t['id']] = name
+                logger.info(f"  product.tipo lookup: {len(tipo_map)} tipos loaded (x_tipo_resumen preferred)")
+            except Exception as e:
+                logger.warning(f"  product.tipo lookup failed ({e}), falling back to x_tipo name")
+                for r in recs:
+                    val = r.get('x_tipo')
+                    if isinstance(val, (list, tuple)) and len(val) == 2:
+                        tipo_map[val[0]] = val[1]
+
+        def get_tipo(r):
+            tid = xid(r.get('x_tipo'))
+            if tid and tid in tipo_map:
+                return tipo_map[tid]
+            return xm2o_name(r.get('x_tipo'))
 
         vals = [
             (r['id'], xtxt(r.get('name')), xbool(r.get('active')),
