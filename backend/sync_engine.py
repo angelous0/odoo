@@ -539,7 +539,7 @@ class SyncService:
             (r['id'], xtxt(r.get('name')), xbool(r.get('active')),
              xbool(r.get('sale_ok')), xbool(r.get('purchase_ok')), xnum(r.get('list_price')),
              xtxt(r.get('x_marca')),          # char field
-             xtxt(r.get('x_tipo')),            # char field
+             get_tipo(r),                      # x_tipo_resumen > name fallback
              xm2o_name(r.get('tela')),         # many2one -> extract name
              xm2o_name(r.get('entalle')),      # many2one -> extract name
              None,                              # tel: not available
