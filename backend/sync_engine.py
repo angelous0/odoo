@@ -357,6 +357,51 @@ class SyncService:
         n = self._batch_exec(sql, template, vals)
         return n, self._max_wd(recs, cursor)
 
+    def _sync_stock_quants(self, mode, cursor, cs):
+        uid, pw = self._auth('Ambission')
+        domain = self._inc_domain([], cursor, mode)
+        base_fields = ['id', 'product_id', 'location_id', 'qty',
+                        'in_date', 'create_date', 'create_uid', 'write_date', 'write_uid']
+        # Try with reserved_quantity (Odoo 12+), fallback to qty only
+        try:
+            test = self.client.search_read(self.odoo_db, uid, pw, 'stock.quant',
+                                           [('id', '>', 0)], ['id', 'reserved_quantity'], limit=1)
+            has_reserved = True
+            fields = base_fields + ['reserved_quantity']
+        except Exception:
+            has_reserved = False
+            fields = base_fields
+            # Also try 'quantity' instead of 'qty' (Odoo 12+ uses 'quantity')
+        try:
+            test = self.client.search_read(self.odoo_db, uid, pw, 'stock.quant',
+                                           [('id', '>', 0)], ['id', 'quantity'], limit=1)
+            qty_field = 'quantity'
+        except Exception:
+            qty_field = 'qty'
+        if qty_field == 'quantity' and 'qty' in fields:
+            fields = [f if f != 'qty' else 'quantity' for f in fields]
+
+        recs = self._paginate(uid, pw, 'stock.quant', domain, fields, cs)
+        vals = [
+            (r['id'], xid(r.get('product_id')), xid(r.get('location_id')),
+             xnum(r.get(qty_field, r.get('qty'))),
+             xnum(r.get('reserved_quantity', 0)) if has_reserved else 0,
+             xdt(r.get('in_date')),
+             xdt(r.get('create_date')), xid(r.get('create_uid')),
+             xdt(r.get('write_date')), xid(r.get('write_uid')))
+            for r in recs
+        ]
+        sql = """INSERT INTO odoo.stock_quant (company_key,odoo_id,product_id,location_id,qty,reserved_qty,
+                 in_date,odoo_create_date,odoo_create_uid,odoo_write_date,odoo_write_uid,synced_at)
+                 VALUES %s ON CONFLICT (company_key,odoo_id) DO UPDATE SET
+                 product_id=EXCLUDED.product_id,location_id=EXCLUDED.location_id,
+                 qty=EXCLUDED.qty,reserved_qty=EXCLUDED.reserved_qty,in_date=EXCLUDED.in_date,
+                 odoo_create_date=EXCLUDED.odoo_create_date,odoo_create_uid=EXCLUDED.odoo_create_uid,
+                 odoo_write_date=EXCLUDED.odoo_write_date,odoo_write_uid=EXCLUDED.odoo_write_uid,synced_at=now()"""
+        template = "('GLOBAL',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())"
+        n = self._batch_exec(sql, template, vals)
+        return n, self._max_wd(recs, cursor)
+
     def _sync_res_users(self, mode, cursor, cs):
         uid, pw = self._auth('Ambission')
         domain = self._inc_domain([], cursor, mode)
