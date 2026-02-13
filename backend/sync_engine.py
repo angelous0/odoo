@@ -489,23 +489,6 @@ class SyncService:
 
         return tmpl_rows + pp_rows + rel_rows, max_w
 
-    def _detect_product_fields(self, uid, pw):
-        """Detect whether custom fields use x_ prefix or not."""
-        custom = ['marca','tipo','tela','entalle','tel','hilo']
-        x_custom = ['x_marca','x_tipo','x_tela','x_entalle','x_tel','x_hilo']
-        try:
-            self.client.search_read(self.odoo_db, uid, pw, 'product.template', [('id','=',1)],
-                                    ['id'] + x_custom, limit=1)
-            return dict(zip(custom, x_custom))
-        except Exception:
-            try:
-                self.client.search_read(self.odoo_db, uid, pw, 'product.template', [('id','=',1)],
-                                        ['id'] + custom, limit=1)
-                return dict(zip(custom, custom))
-            except Exception:
-                logger.warning("Custom product fields not available")
-                return {c: c for c in custom}
-
     def _sync_attributes(self, mode, cursor, cs):
         uid, pw = self._auth('Ambission')
         total = 0
