@@ -397,16 +397,42 @@ CREATE INDEX IF NOT EXISTS idx_ptemplate_create_date ON odoo.product_template (c
 CREATE INDEX IF NOT EXISTS idx_pos_order_create_date ON odoo.pos_order (company_key, odoo_create_date DESC);
 
 -- ============================================================
+-- STOCK LOCATIONS
+-- ============================================================
+CREATE TABLE IF NOT EXISTS odoo.stock_location (
+    company_key     TEXT NOT NULL,
+    odoo_id         INT NOT NULL,
+    name            TEXT,
+    x_nombre        TEXT,
+    complete_name   TEXT,
+    usage           TEXT,
+    active          BOOLEAN,
+    location_id     INT NULL,
+    company_id      INT NULL,
+    odoo_create_date TIMESTAMPTZ NULL,
+    odoo_create_uid  INT NULL,
+    odoo_write_date  TIMESTAMPTZ NULL,
+    odoo_write_uid   INT NULL,
+    synced_at       TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY (company_key, odoo_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_stock_location_usage ON odoo.stock_location (company_key, usage);
+CREATE INDEX IF NOT EXISTS idx_stock_location_complete_name ON odoo.stock_location (company_key, complete_name);
+CREATE INDEX IF NOT EXISTS idx_stock_location_parent ON odoo.stock_location (company_key, location_id);
+
+-- ============================================================
 -- SEED: Insertar jobs base (idempotente)
 -- ============================================================
 INSERT INTO odoo.sync_job (job_code, run_time, priority)
 VALUES
-    ('RES_COMPANY',  '23:00', 10),
-    ('RES_USERS',    '23:02', 20),
-    ('RES_PARTNER',  '23:05', 30),
-    ('PRODUCTS',     '23:10', 40),
-    ('ATTRIBUTES',   '23:12', 50),
-    ('POS_ORDERS',   '23:20', 60)
+    ('RES_COMPANY',      '23:00', 10),
+    ('STOCK_LOCATIONS',  '23:08', 15),
+    ('RES_USERS',        '23:02', 20),
+    ('RES_PARTNER',      '23:05', 30),
+    ('PRODUCTS',         '23:10', 40),
+    ('ATTRIBUTES',       '23:12', 50),
+    ('POS_ORDERS',       '23:20', 60)
 ON CONFLICT (job_code) DO NOTHING;
 """
 
@@ -417,6 +443,7 @@ ODOO_TABLES = [
     "res_company",
     "res_users",
     "res_partner",
+    "stock_location",
     "product_template",
     "product_product",
     "product_attribute",
