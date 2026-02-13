@@ -547,7 +547,7 @@ async def get_stock_by_product(
                 total = cur.fetchone()["total"]
                 offset = (page - 1) * page_size
                 cur.execute(f"""
-                    SELECT product_id, qty, reserved_qty, available_qty
+                    SELECT product_id, product_name, marca, tipo, qty, reserved_qty, available_qty
                     FROM odoo.v_stock_by_product {where}
                     ORDER BY available_qty DESC
                     LIMIT %s OFFSET %s
@@ -587,7 +587,8 @@ async def get_stock_by_location(
                 total = cur.fetchone()["total"]
                 offset = (page - 1) * page_size
                 cur.execute(f"""
-                    SELECT v.product_id, v.location_id, v.available_qty, v.qty, v.reserved_qty,
+                    SELECT v.product_id, v.location_id, v.product_name, v.marca, v.tipo,
+                           v.available_qty, v.qty, v.reserved_qty,
                            sl.x_nombre as location_name, sl.name as location_raw_name
                     FROM odoo.v_stock_by_product_location v
                     LEFT JOIN odoo.stock_location sl ON sl.company_key='GLOBAL' AND sl.odoo_id=v.location_id
