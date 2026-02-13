@@ -394,36 +394,6 @@ LEFT JOIN odoo.product_template pt
     ON pt.company_key = 'GLOBAL' AND pt.odoo_id = vv.product_tmpl_id;
 
 -- ============================================================
--- I) STOCK VIEWS
--- ============================================================
-
--- I1) v_stock_by_product_location (internal active locations only)
-CREATE OR REPLACE VIEW odoo.v_stock_by_product_location AS
-SELECT
-    sq.product_id,
-    sq.location_id,
-    SUM(sq.qty)          AS qty,
-    SUM(sq.reserved_qty) AS reserved_qty,
-    SUM(sq.qty) - SUM(sq.reserved_qty) AS available_qty
-FROM odoo.stock_quant sq
-JOIN odoo.stock_location sl
-    ON sl.company_key = 'GLOBAL' AND sl.odoo_id = sq.location_id
-WHERE sq.company_key = 'GLOBAL'
-  AND sl.usage = 'internal'
-  AND COALESCE(sl.active, true) = true
-GROUP BY sq.product_id, sq.location_id;
-
--- I2) v_stock_by_product (aggregated across all internal locations)
-CREATE OR REPLACE VIEW odoo.v_stock_by_product AS
-SELECT
-    product_id,
-    SUM(qty)          AS qty,
-    SUM(reserved_qty) AS reserved_qty,
-    SUM(available_qty) AS available_qty
-FROM odoo.v_stock_by_product_location
-GROUP BY product_id;
-
--- ============================================================
 -- ALTERACIONES: columnas audit (odoo_create_date, odoo_create_uid, odoo_write_uid)
 -- ============================================================
 
@@ -515,6 +485,36 @@ CREATE TABLE IF NOT EXISTS odoo.stock_quant (
 CREATE INDEX IF NOT EXISTS idx_stock_quant_product ON odoo.stock_quant (company_key, product_id);
 CREATE INDEX IF NOT EXISTS idx_stock_quant_location ON odoo.stock_quant (company_key, location_id);
 CREATE INDEX IF NOT EXISTS idx_stock_quant_prod_loc ON odoo.stock_quant (company_key, product_id, location_id);
+
+-- ============================================================
+-- I) STOCK VIEWS (after tables exist)
+-- ============================================================
+
+-- I1) v_stock_by_product_location (internal active locations only)
+CREATE OR REPLACE VIEW odoo.v_stock_by_product_location AS
+SELECT
+    sq.product_id,
+    sq.location_id,
+    SUM(sq.qty)          AS qty,
+    SUM(sq.reserved_qty) AS reserved_qty,
+    SUM(sq.qty) - SUM(sq.reserved_qty) AS available_qty
+FROM odoo.stock_quant sq
+JOIN odoo.stock_location sl
+    ON sl.company_key = 'GLOBAL' AND sl.odoo_id = sq.location_id
+WHERE sq.company_key = 'GLOBAL'
+  AND sl.usage = 'internal'
+  AND COALESCE(sl.active, true) = true
+GROUP BY sq.product_id, sq.location_id;
+
+-- I2) v_stock_by_product (aggregated across all internal locations)
+CREATE OR REPLACE VIEW odoo.v_stock_by_product AS
+SELECT
+    product_id,
+    SUM(qty)          AS qty,
+    SUM(reserved_qty) AS reserved_qty,
+    SUM(available_qty) AS available_qty
+FROM odoo.v_stock_by_product_location
+GROUP BY product_id;
 
 -- ============================================================
 -- SEED: Insertar jobs base (idempotente)
