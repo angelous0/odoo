@@ -440,6 +440,28 @@ async def update_sync_job(job_code: str, enabled: Optional[bool] = None, mode: O
         return {"success": False, "message": str(e)}
 
 
+@api_router.get("/stock-locations")
+async def get_stock_locations():
+    """Get all stock locations (GLOBAL)."""
+    try:
+        with get_pg_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("""
+                    SELECT odoo_id, x_nombre, name, complete_name, usage, active,
+                           location_id, company_id, odoo_write_date
+                    FROM odoo.stock_location
+                    WHERE company_key = 'GLOBAL'
+                    ORDER BY complete_name
+                """)
+                locations = cur.fetchall()
+                for loc in locations:
+                    if loc['odoo_write_date'] is not None:
+                        loc['odoo_write_date'] = loc['odoo_write_date'].isoformat()
+        return {"locations": locations}
+    except Exception as e:
+        return {"locations": [], "error": str(e)}
+
+
 app.include_router(api_router)
 
 app.add_middleware(
