@@ -18,7 +18,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { RefreshCw, Activity, CheckCircle, XCircle } from "lucide-react";
+import { RefreshCw, Activity, CheckCircle, XCircle, Loader2 } from "lucide-react";
 
 export default function LogsPage({ api }) {
   const [logs, setLogs] = useState([]);
@@ -40,6 +40,14 @@ export default function LogsPage({ api }) {
   useEffect(() => {
     fetchLogs();
   }, [fetchLogs]);
+
+  // Auto-refresh every 5s if there are RUNNING jobs
+  useEffect(() => {
+    const hasRunning = logs.some((l) => l.status === "RUNNING");
+    if (!hasRunning) return;
+    const interval = setInterval(fetchLogs, 5000);
+    return () => clearInterval(interval);
+  }, [logs, fetchLogs]);
 
   const filteredLogs =
     filterStatus === "ALL"
