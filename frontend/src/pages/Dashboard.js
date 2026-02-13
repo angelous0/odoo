@@ -242,9 +242,10 @@ export default function Dashboard({ connection, migrationStatus, onMigrate, onRe
             </Button>
           </div>
           {syncing && (
-            <div className="mt-3 flex items-center gap-2 text-sm text-muted-foreground">
-              <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-              <span>Sincronización en progreso: <span className="text-primary font-medium">{syncing}</span></span>
+            <div className="mt-3 flex items-center gap-2 text-sm bg-primary/10 border border-primary/20 rounded-md px-4 py-2">
+              <RefreshCw className="h-4 w-4 animate-spin text-primary" />
+              <span className="text-foreground font-medium">{syncing} en progreso...</span>
+              <span className="text-muted-foreground text-xs">No cierres esta página</span>
             </div>
           )}
         </CardContent>
