@@ -14,10 +14,11 @@ export default function LocationsPage({ api }) {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
 
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback(async (searchVal) => {
     setLoading(true);
     try {
-      const params = search.trim() ? { search: search.trim() } : {};
+      const s = searchVal !== undefined ? searchVal : search;
+      const params = s.trim() ? { search: s.trim() } : {};
       const res = await axios.get(`${api}/stock-locations`, { params });
       setLocations(res.data.locations || []);
     } catch (e) {
@@ -27,10 +28,15 @@ export default function LocationsPage({ api }) {
     }
   }, [api, search]);
 
+  // Immediate load on mount
+  useEffect(() => { fetchData(); }, [api]);
+
+  // Debounced search
   useEffect(() => {
-    const t = setTimeout(fetchData, 300);
+    if (search === "") return; // skip initial
+    const t = setTimeout(() => fetchData(search), 300);
     return () => clearTimeout(t);
-  }, [fetchData]);
+  }, [search]);
 
   const fmtDate = (iso) => {
     if (!iso) return "—";
