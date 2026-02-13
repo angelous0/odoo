@@ -8,6 +8,9 @@ import LogsPage from "@/pages/LogsPage";
 import LocationsPage from "@/pages/LocationsPage";
 import PosLinesPage from "@/pages/PosLinesPage";
 import HealthPage from "@/pages/HealthPage";
+import StockQuantsPage from "@/pages/StockQuantsPage";
+import StockByProductPage from "@/pages/StockByProductPage";
+import StockByLocationPage from "@/pages/StockByLocationPage";
 import { Database } from "lucide-react";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
@@ -126,6 +129,45 @@ function App() {
                     POS Lines
                   </NavLink>
                   <NavLink
+                    to="/stock-quants"
+                    className={({ isActive }) =>
+                      `px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                        isActive
+                          ? "bg-secondary text-foreground"
+                          : "text-muted-foreground hover:text-foreground hover:bg-secondary/50"
+                      }`
+                    }
+                    data-testid="nav-stock-quants"
+                  >
+                    Stock Quants
+                  </NavLink>
+                  <NavLink
+                    to="/stock-by-product"
+                    className={({ isActive }) =>
+                      `px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                        isActive
+                          ? "bg-secondary text-foreground"
+                          : "text-muted-foreground hover:text-foreground hover:bg-secondary/50"
+                      }`
+                    }
+                    data-testid="nav-stock-product"
+                  >
+                    Stock x Producto
+                  </NavLink>
+                  <NavLink
+                    to="/stock-by-location"
+                    className={({ isActive }) =>
+                      `px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                        isActive
+                          ? "bg-secondary text-foreground"
+                          : "text-muted-foreground hover:text-foreground hover:bg-secondary/50"
+                      }`
+                    }
+                    data-testid="nav-stock-location"
+                  >
+                    Stock x Tienda
+                  </NavLink>
+                  <NavLink
                     to="/health"
                     className={({ isActive }) =>
                       `px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
@@ -181,6 +223,9 @@ function App() {
             <Route path="/logs" element={<LogsPage api={API} />} />
             <Route path="/locations" element={<LocationsPage api={API} />} />
             <Route path="/pos-lines" element={<PosLinesPage api={API} />} />
+            <Route path="/stock-quants" element={<StockQuantsPage api={API} />} />
+            <Route path="/stock-by-product" element={<StockByProductPage api={API} />} />
+            <Route path="/stock-by-location" element={<StockByLocationPage api={API} />} />
             <Route path="/health" element={<HealthPage api={API} />} />
           </Routes>
         </main>
