@@ -75,6 +75,24 @@ async def startup_event():
             logger.warning(f"Auto-migration on startup failed: {result['message']}")
     except Exception as e:
         logger.warning(f"Auto-migration on startup error: {e}")
+    # Cleanup orphan RUNNING entries from previous crash/restart
+    try:
+        conn = psycopg2.connect(pg_url)
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE odoo.sync_run_log
+                SET status = 'ERROR',
+                    error_message = 'Interrumpido por reinicio del servidor',
+                    ended_at = now()
+                WHERE status = 'RUNNING'
+            """)
+            cleaned = cur.rowcount
+            conn.commit()
+        conn.close()
+        if cleaned:
+            logger.info(f"Cleaned {cleaned} orphan RUNNING sync entries")
+    except Exception as e:
+        logger.warning(f"Cleanup orphan RUNNING failed: {e}")
     # Start scheduler
     scheduler.start()
 
