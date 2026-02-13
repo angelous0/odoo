@@ -159,7 +159,9 @@ export default function LogsPage({ api }) {
                       {formatDate(log.started_at)}
                     </TableCell>
                     <TableCell className="font-mono text-xs text-muted-foreground">
-                      {formatDate(log.ended_at)}
+                      {log.ended_at ? formatDate(log.ended_at) : log.status === "RUNNING" ? (
+                        <span className="text-yellow-400 animate-pulse">sincronizando...</span>
+                      ) : "—"}
                     </TableCell>
                     <TableCell className="text-center">
                       {log.status === "OK" ? (
