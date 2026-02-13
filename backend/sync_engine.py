@@ -503,41 +503,45 @@ class SyncService:
                         'create_date','create_uid','write_date','write_uid']
         recs = self._paginate(uid, pw, 'product.template', domain, tmpl_fields, cs)
 
-        # Lookup x_tipo_resumen from product.tipo model (name -> x_tipo_resumen)
-        # x_tipo comes as a string (name) in this Odoo 10 instance
-        tipo_name_map = {}
-        try:
-            tipo_recs = self.client.search_read(self.odoo_db, uid, pw, 'product.tipo',
-                                                [], ['id', 'name', 'x_tipo_resumen'], limit=200)
-            for t in tipo_recs:
-                name = t.get('name') or ''
-                resumen = t.get('x_tipo_resumen')
-                if resumen and resumen is not False:
-                    tipo_name_map[name] = resumen
-            logger.info(f"  product.tipo name->resumen mapping: {len(tipo_name_map)} entries")
-        except Exception as e:
-            logger.warning(f"  product.tipo lookup failed ({e}), using x_tipo as-is")
+        # Build name->resumen mappings for tipo, entalle, tela
+        def _load_resumen_map(model, resumen_field):
+            m = {}
+            try:
+                recs_m = self.client.search_read(self.odoo_db, uid, pw, model,
+                                                 [], ['id', 'name', resumen_field], limit=200)
+                for rec in recs_m:
+                    name = rec.get('name') or ''
+                    resumen = rec.get(resumen_field)
+                    if resumen and resumen is not False:
+                        m[name] = resumen
+                logger.info(f"  {model} name->{resumen_field} mapping: {len(m)} entries")
+            except Exception as e:
+                logger.warning(f"  {model} lookup failed ({e}), using field as-is")
+            return m
 
-        def get_tipo(r):
-            val = r.get('x_tipo')
+        tipo_map = _load_resumen_map('product.tipo', 'x_tipo_resumen')
+        entalle_map = _load_resumen_map('product.entalle', 'x_entalle')
+        tela_map = _load_resumen_map('product.tela', 'x_tela')
+
+        def _resolve(val, name_map):
             if val is False or val is None:
                 return None
             if isinstance(val, str):
-                return tipo_name_map.get(val, val)
+                return name_map.get(val, val)
             if isinstance(val, (list, tuple)) and len(val) >= 2:
                 name = str(val[1])
-                return tipo_name_map.get(name, name)
+                return name_map.get(name, name)
             return str(val)
 
         vals = [
             (r['id'], xtxt(r.get('name')), xbool(r.get('active')),
              xbool(r.get('sale_ok')), xbool(r.get('purchase_ok')), xnum(r.get('list_price')),
-             xtxt(r.get('x_marca')),          # char field
-             get_tipo(r),                      # x_tipo_resumen > name fallback
-             xm2o_name(r.get('tela')),         # many2one -> extract name
-             xm2o_name(r.get('entalle')),      # many2one -> extract name
+             xtxt(r.get('x_marca')),
+             _resolve(r.get('x_tipo'), tipo_map),
+             _resolve(r.get('tela'), tela_map),
+             _resolve(r.get('entalle'), entalle_map),
              None,                              # tel: not available
-             xm2o_name(r.get('hilo')),         # many2one -> extract name
+             xm2o_name(r.get('hilo')),
              xdt(r.get('write_date')), xdt(r.get('create_date')),
              xid(r.get('create_uid')), xid(r.get('write_uid')))
             for r in recs
