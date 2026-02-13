@@ -5,7 +5,8 @@ import axios from "axios";
 import { Toaster, toast } from "sonner";
 import Dashboard from "@/pages/Dashboard";
 import LogsPage from "@/pages/LogsPage";
-import { Database, Activity } from "lucide-react";
+import LocationsPage from "@/pages/LocationsPage";
+import { Database, Activity, MapPin } from "lucide-react";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
@@ -96,6 +97,19 @@ function App() {
                   >
                     Historial
                   </NavLink>
+                  <NavLink
+                    to="/locations"
+                    className={({ isActive }) =>
+                      `px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                        isActive
+                          ? "bg-secondary text-foreground"
+                          : "text-muted-foreground hover:text-foreground hover:bg-secondary/50"
+                      }`
+                    }
+                    data-testid="nav-locations"
+                  >
+                    Locations
+                  </NavLink>
                 </div>
               </div>
               <div className="flex items-center gap-3" data-testid="connection-status">
@@ -137,6 +151,7 @@ function App() {
               }
             />
             <Route path="/logs" element={<LogsPage api={API} />} />
+            <Route path="/locations" element={<LocationsPage api={API} />} />
           </Routes>
         </main>
       </BrowserRouter>
