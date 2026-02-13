@@ -3,83 +3,63 @@ El usuario, un arquitecto de datos, solicitó la creación de un Operational Dat
 
 **PRODUCT REQUIREMENTS:**
 
-1.  **Fase 1 (Schema & Vistas):** Crear desde cero el schema  en PostgreSQL con todas las tablas, índices y vistas para maestros (partners, productos), atributos y órdenes de punto de venta (POS), siguiendo una estructura multi-empresa ().
-2.  **Fase 2 (Sync Engine):** Implementar un motor de sincronización real desde Odoo 10 vía XML-RPC.
-    *   Debe ser incremental (usando  como cursor).
-    *   Debe manejar datos maestros como globales () y datos transaccionales (POS) por empresa (, ).
-    *   Debe registrar cada ejecución y sus resultados en logs ().
-    *   Debe tener un scheduler para ejecuciones programadas y endpoints para ejecuciones manuales.
-    *   Credenciales de Odoo deben ser manejadas a través de variables de entorno.
-3.  **Fase 3 (Stock Locations):** Agregar la tabla  y su correspondiente lógica de sincronización para traer las tiendas/almacenes desde Odoo.
-4.  **Fase 4 (UI y Vistas de Validación):** Crear una interfaz de usuario en React para visualizar los datos sincronizados, incluyendo:
-    *   Un panel de control de sincronización.
-    *   Tablas para visualizar ,  (enriquecida con joins), y un panel de Salud del sistema.
-5.  **Fase 5 (Stock Actual):** Agregar la sincronización del stock actual ( de Odoo) para poder filtrar productos por disponibilidad. Esto incluye:
-    *   Crear la tabla .
-    *   Implementar el job de sync para .
-    *   Crear vistas SQL (, ) para calcular el stock disponible.
-    *   Crear pantallas en la UI para validar los datos de stock.
+1.  **Fase 1 (Schema & Vistas):** Crear el schema  en PostgreSQL con tablas/vistas para maestros (partners, productos), atributos y órdenes de punto de venta (POS).
+2.  **Fase 2 (Sync Engine):** Implementar un motor de sincronización incremental desde Odoo 10 vía XML-RPC.
+3.  **Fase 3 (Stock Locations):** Sincronizar las ubicaciones de stock ().
+4.  **Fase 4 (UI y Vistas de Validación):** Crear una UI en React para visualizar los datos.
+5.  **Fase 5 (Stock Actual):** Agregar la sincronización del stock actual () y crear vistas/UI para analizar la disponibilidad.
+6.  **Requisito sobre la marcha:** Para el campo  en , se debe priorizar el valor del campo  del modelo relacionado. Si no existe, usar el campo  como fallback.
 
 **User's preferred language**: Spanish. The next agent MUST respond in Spanish.
 
 **what currently exists?**
-- Un backend en FastAPI y un frontend en React.
-- Una base de datos PostgreSQL con el esquema  y todas las tablas requeridas para maestros, productos, POS y ubicaciones.
-- Un motor de sincronización () que se conecta a Odoo 10 vía XML-RPC para poblar las tablas. El motor maneja sincronización incremental, lógica multi-empresa, y logging.
-- Más de 1.25 millones de registros han sido sincronizados exitosamente desde Odoo, incluyendo partners, productos, órdenes de venta y líneas de orden para dos empresas distintas.
-- Una interfaz de usuario con un dashboard principal, historial de sincronización, panel de control, y páginas para visualizar ubicaciones (), líneas de POS enriquecidas () y el estado general del sistema ().
-- Se implementaron optimizaciones clave como el uso de  para inserciones en lote y paginación por ID para evitar bucles infinitos con grandes volúmenes de datos.
+Un sistema completo y funcional de sincronización de datos desde Odoo 10 a un ODS en PostgreSQL. El backend en FastAPI gestiona la conexión XML-RPC, la sincronización incremental/completa, y la lógica multi-empresa. Se han sincronizado con éxito más de 1 millón de registros de  y todos los datos maestros y de POS. El frontend en React ofrece un dashboard para ejecutar sincronizaciones, un historial detallado, y múltiples vistas para validar los datos (productos, POS, ubicaciones, stock). Se han implementado mejoras significativas de UX, como indicadores de progreso para tareas largas y un historial que se actualiza automáticamente. El sistema también limpia automáticamente los trabajos de sincronización huérfanos que quedan en estado RUNNING tras un reinicio del servidor.
 
 **Last working item**:
-    - Last item agent was working: Implementación de la sincronización de stock actual (). El agente creó todos los archivos necesarios:
-        1.  **DDL y Vistas:** Actualizó  para crear la tabla , el job  y las vistas  y .
-        2.  **Lógica de Sync:** Actualizó  con la función .
-        3.  **Endpoints:** Actualizó  para exponer los nuevos endpoints (, , ).
-        4.  **UI:** Creó tres nuevas páginas en el frontend (, , ) y actualizó la navegación en .
-    - Status: IN PROGRESS
-    - Agent Testing Done: N
-    - Which testing method agent to use? backend testing agent
-    - User Testing Done: N
+- Last item agent was working: Investigando por qué la vista de POS Lines Full () no refleja los valores actualizados del campo  en los productos. El agente modificó con éxito la sincronización de  para que el campo  se pueble con el valor de  (en lugar de ), y verificó que los datos en la tabla  son correctos. Sin embargo, el usuario señaló que la vista de líneas de POS, que se une a esta tabla, sigue mostrando los valores antiguos.
+- Status: IN PROGRESS
+- Agent Testing Done: N
+- Which testing method agent to use? backend testing agent
+- User Testing Done: N
 
 **All Pending/In progress Issue list**:
-  - Issue 1: (P0) Finalizar y probar la implementación de . Los archivos fueron creados pero no se ha ejecutado la migración, ni se ha probado el proceso de sincronización o la visualización de los datos.
+  - Issue 1: (P0) La página POS Lines Full muestra datos incorrectos para el campo Tipo.
 
   Issues Detail:
   - Issue 1: 
-     - Attempted fixes: N/A
+     - Attempted fixes: El agente modificó  para usar una función personalizada () que lee  de Odoo para el campo . Se ejecutó una resincronización completa de , y se confirmó que los datos en la tabla  están actualizados y son correctos.
      - Next debug checklist: 
-        1. Reiniciar el backend para aplicar los cambios en el código y ejecutar la migración (). Verificar que la nueva tabla, vistas y el  se hayan creado correctamente en PostgreSQL.
-        2. Ejecutar manualmente el job de sincronización  a través del endpoint  con .
-        3. Monitorear los logs del backend y la tabla  para asegurar que el sync se complete exitosamente.
-        4. Probar los nuevos endpoints con  para verificar que devuelvan datos:
-           - 
-           - 
-           - 
-        5. Usar la herramienta de captura de pantalla para verificar que las 3 nuevas páginas de la UI (, , ) carguen y muestren los datos correctamente.
-     - Why fix this issue and what will be achieved with the fix? Completar este issue implementará la funcionalidad final solicitada por el usuario: la capacidad de ver y analizar el stock actual de los productos.
+        1. Revisar la definición de la vista  en  para asegurar que el  con  es correcto.
+        2. Ejecutar una consulta directa a la vista en la base de datos para ver qué valores está devolviendo: .
+        3. Comparar con los datos de la tabla base: .
+        4. Verificar el endpoint en  () para asegurarse de que no haya ninguna lógica de transformación adicional.
+        5. Una vez que la vista devuelva los datos correctos, verificar la página del frontend en .
+     - Why fix this issue and what will be achieved with the fix? Para asegurar la consistencia de los datos en toda la aplicación y que los reportes reflejen la información más precisa del producto, según lo solicitado por el usuario.
      - Status:  IN PROGRESS
      - Is recurring issue? N
      - Should Test frontend/backend/both after fix? both
      - Blocked on other issue: None
 
 **In progress Task List**:
-  - Task 1: (P0) Finalizar la implementación de la funcionalidad de Stock.
-     - Where to resume: Los archivos ya han sido creados. El siguiente paso es reiniciar el servidor backend para aplicar la migración y los cambios en el código, y luego proceder con las pruebas como se detalla en el checklist del Issue 1.
-     - What will be achieved with this? La aplicación podrá sincronizar, procesar y mostrar datos de stock actual desde Odoo, completando el alcance del proyecto.
-     - Status: IN PROGRESS
-     - Should Test frontend/backend/both after fix? both
-     - Blocked on something: None
+  - None.
 
 **Upcoming and Future Tasks**
-No hay tareas futuras explícitas. El foco está en completar la implementación actual.
+- No hay tareas futuras definidas. El proyecto está funcionalmente completo según los requerimientos iniciales. El foco está en resolver el issue actual.
 
 **Completed work in this session**
-- **Migración a PostgreSQL y Creación de Schema:** Se configuró el proyecto para usar PostgreSQL en lugar de MongoDB y se crearon todas las tablas, índices y vistas iniciales para el ODS de Odoo.
-- **Implementación del Motor de Sincronización:** Se desarrolló un cliente XML-RPC para Odoo 10 y un motor de sincronización robusto () que maneja lógica incremental, multi-empresa y logging. Se cargaron exitosamente más de 1.25 millones de registros.
-- **Optimización de Rendimiento:** Se implementaron inserciones en lote () y se corrigió un problema de paginación cambiando de un método basado en  a uno basado en uid=0(root) gid=0(root) groups=0(root), lo que solucionó bucles infinitos y mejoró drásticamente la velocidad de sincronización de grandes volúmenes de datos.
-- **Sincronización de :** Se agregó la tabla y la lógica para sincronizar las ubicaciones de stock.
-- **Corrección de Mapeo de Datos:** Se arregló un bug en la sincronización de  donde los campos  y  no se poblaban. Se identificó que eran campos  y se ajustó la lógica para extraer el nombre de la relación.
-- **Desarrollo de UI de Validación:** Se crearon múltiples páginas en el frontend para visualizar los datos sincronizados, incluyendo un panel de salud, una vista detallada de líneas de POS y una tabla de ubicaciones.
+- **Implementación de Sincronización de Stock:** Se completó toda la funcionalidad de , incluyendo la creación de la tabla , las vistas  y , el job de sincronización y las tres páginas de UI correspondientes.
+- **Optimización de Sync para Grandes Volúmenes:** Se refactorizó el  para procesar y escribir datos en lotes (), solucionando problemas de memoria y timeouts al sincronizar más de 1 millón de registros de stock.
+- **Corrección de Bugs Críticos:**
+    - Se solucionó un bug de orden en  donde las vistas se creaban antes que sus tablas base.
+    - Se corrigió un error de mapeo de campos ( vs ) que causaba que el stock se guardara como .
+- **Mejoras de Scheduler:** Se añadió soporte para ejecuciones  y se configuró el job  para que se ejecute cada hora.
+- **Mejoras de UI/UX:**
+    - Se implementó feedback visual claro (toasts, barras de progreso, botones deshabilitados) para las sincronizaciones largas.
+    - Se añadió un estado EN PROCESO () en la página de Historial, con auto-refresco cada 5 segundos mientras haya tareas activas.
+- **Mantenimiento y Estabilidad:**
+    - Se implementó una rutina de limpieza al arranque del servidor para marcar como  los jobs que quedaron pegados en estado  por un reinicio.
+- **Validación Completa:** Se ejecutó  después de la implementación de la funcionalidad de stock, con un resultado de 100% de tests pasados.
+- **Lógica de  en Productos:** Se actualizó el sync de productos para usar  en lugar de , como solicitó el usuario.
 
 **Earlier issues found/mentioned but not fixed**
    - None
@@ -92,82 +72,86 @@ No hay tareas futuras explícitas. El foco está en completar la implementación
 
 **Key Technical Concepts**
 - **Backend:** FastAPI, PostgreSQL (), XML-RPC.
-- **Frontend:** React, TailwindCSS.
-- **Arquitectura:** ODS (Operational Data Store) con sincronización incremental. Modelo de datos multi-empresa gestionado por .
-- **Base de Datos:** Migración idempotente en el arranque de la aplicación. Vistas SQL para datos enriquecidos y agregados.
+- **Frontend:** React, TailwindCSS,  para toasts.
+- **Arquitectura:** ODS (Operational Data Store) con sincronización incremental/completa.
+- **Base de Datos:** Migración idempotente en el arranque. Vistas SQL para datos agregados. Advisory locks para prevenir concurrencia en syncs.
 
 **key DB schema**
-- : {job_code PK}
-- : {id PK}
+- : {job_code PK, schedule_type, run_time, mode, chunk_size}
+- : {id PK, status, started_at, finished_at}
+- : {(company_key, odoo_id) PK}
+- : {(company_key, odoo_id) PK, tipo}
 - : {(company_key, odoo_id) PK}
 - : {(company_key, odoo_id) PK}
 - : {(company_key, odoo_id) PK}
-- : {(company_key, odoo_id) PK}
-- : {(company_key, odoo_id) PK} (a punto de ser creada por la migración pendiente)
 
 **changes in tech stack**
-- Se migró el stack de la base de datos de MongoDB (plantilla inicial) a PostgreSQL para cumplir con los requisitos del usuario.
+- None in this session.
 
 **All files of reference**
-- : Define toda la estructura de la base de datos. Es el archivo central para cualquier cambio en el schema.
-- : Contiene toda la lógica de negocio para la sincronización de datos desde Odoo.
-- : Expone todos los endpoints de la API y gestiona el ciclo de vida de la aplicación.
-- : Define la estructura de navegación y las rutas del frontend.
-- : Directorio que contiene todos los componentes de página principales.
+- : Modificado para la lógica de  y para la nueva lógica del campo .
+- : Modificado para las nuevas tablas/vistas de stock, la lógica  y la limpieza de jobs huérfanos.
+- : Modificado para los nuevos endpoints de stock y la llamada a la limpieza de jobs.
+- : Modificado para mejorar el feedback de los botones de sync.
+- : Modificado para mostrar el estado  con auto-refresco.
+- : Añadidas las rutas para las páginas de stock.
 
 **Areas that need refactoring**:
-- None identified.
+- None.
 
 **key api endpoints**
-- : Ejecuta trabajos de sincronización (manual).
-- : Obtiene el estado de los jobs y los últimos logs.
-- : Proporciona un resumen del estado de los datos en el ODS.
-- : Obtiene las líneas de POS enriquecidas con datos de productos.
-- : Obtiene las ubicaciones sincronizadas.
-- **Nuevos endpoints (pendientes de prueba):**
-    - 
-    - 
-    - 
+- : Ejecuta trabajos de sincronización.
+- : Obtiene el estado de los jobs.
+- : Proporciona un resumen del estado de los datos.
+- : Obtiene las líneas de POS enriquecidas (origen del issue actual).
+- : Obtiene las ubicaciones.
+- : Obtiene los registros de .
+- : Obtiene el stock agregado por producto.
+- : Obtiene el stock agregado por producto y ubicación.
+- : Ejecuta las migraciones de la base de datos.
 
 **Critical Info for New Agent**
-- El proyecto utiliza PostgreSQL, no MongoDB. La conexión está en .
-- La sincronización desde Odoo es la funcionalidad central. Es incremental y usa  como cursor.
-- Los datos maestros (productos, partners) se guardan con . Los datos de POS se separan por  ('Ambission', 'ProyectoModa'). Los datos de stock también son .
-- Para evitar problemas de rendimiento y concurrencia, la sincronización usa  para inserciones en lote y un  en PostgreSQL para prevenir ejecuciones simultáneas.
-- La paginación en Odoo debe hacerse por uid=0(root) gid=0(root) groups=0(root) para evitar bucles con registros que comparten el mismo .
+- El issue actual está en la vista . La tabla  tiene los datos correctos para , pero la vista no los está reflejando. La investigación debe centrarse en la definición SQL de la vista en .
+- El scheduler () ahora soporta . El job  está configurado para usarlo.
+- El servidor () ahora ejecuta una función  al inicio para evitar que los jobs se queden pegados en estado .
 
 **documents and test reports created in this job**
   - 
+  - 
 
 **Last 10 User Messages and any pending HUMAN messages** 
-- User: o sea si pero no jalas la información de product.tela, product.entalle claro que esas son las tablas de los campos tela, entalle en product.template
-- Agent: Investigó y descubrió que  y  eran campos  en Odoo y no .
-- Agent: Corrigió la lógica de sincronización de productos para extraer el nombre de la relación .
-- Agent: Re-sincronizó los productos y verificó que los datos de  y  ahora se poblaban correctamente.
-- Agent: Mostró al usuario una captura de pantalla con los datos correctos en la UI.
-- User: Solicitó la siguiente fase: agregar la sincronización de  para tener el stock actual.
-- Agent: Analizó la nueva solicitud.
-- Agent: Procedió a implementar la nueva funcionalidad, creando los archivos de migración, lógica de sync, endpoints y páginas de UI en paralelo.
-- User: Ningún mensaje pendiente.
+- **User:** Preguntó si la sincronización incremental funcionaba.
+- **Agent:** Confirmó que sí, ejecutando una prueba que solo procesó 4 registros nuevos.
+- **User:** Preguntó qué hacían los diferentes botones de sincronización.
+- **Agent:** Explicó la función de Sync Todo, Sync Global y los botones de POS por empresa.
+- **User:** Reportó que al presionar Sync Todo no pasaba nada.
+- **Agent:** Investigó y descubrió que era un problema de feedback de UI (la tarea se ejecutaba pero tardaba mucho). Mejoró la UI con toasts, barras de progreso y botones deshabilitados.
+- **User:** Sugirió mostrar los trabajos en progreso en la página de Historial.
+- **Agent:** Implementó un estado EN PROCESO con un badge animado y auto-refresco en la tabla de historial.
+- **User:** Solicitó que  se actualice cada hora.
+- **Agent:** Modificó el scheduler para soportar la frecuencia  y aplicó el cambio.
+- **User:** Reportó que un job se quedó pegado en EN PROCESO y la tabla se refrescaba sin parar.
+- **Agent:** Implementó una limpieza automática de jobs huérfanos al arrancar el servidor para solucionar el problema.
+- **User:** Solicitó que el campo  de los productos use  en lugar de .
+- **Agent:** Implementó el cambio y resincronizó los productos.
+- **User:** Informó que el cambio no se reflejaba en el reporte de POS Lines.
+- **Agent:** Acusó recibo y comenzó a investigar. Este es el estado actual.
 
 **Project Health Check:**
-- **Broken**: Nada está roto.
-- **Mocked**: No hay datos mockeados; toda la información es real, sincronizada desde la instancia de Odoo del cliente.
+- **Broken**: La vista de datos  y la página correspondiente POS Lines Full están mostrando datos desactualizados para el campo Tipo, lo que constituye una regresión.
+- **Mocked**: No hay datos mockeados.
 
 **3rd Party Integrations**
 - **Odoo 10:** Integrado vía protocolo XML-RPC para la sincronización de datos.
 
 **Testing status**
   - Testing agent used after significant changes: YES
-  - Troubleshoot agent used after agent stuck in loop: YES
+  - Troubleshoot agent used after agent stuck in loop: NO
   - Test files created: []
-  - Known regressions: []
+  - Known regressions: Sí, el campo  en el reporte  está mostrando datos antiguos después del último cambio.
 
 **Credentials to test flow:**
-Las credenciales para Odoo están configuradas como variables de entorno en  y fueron proporcionadas por el usuario en el historial de chat. No es necesario volver a solicitarlas.
+Las credenciales de Odoo están en las variables de entorno de . No es necesario solicitarlas.
 
 **What agent forgot to execute**
-El agente ha preparado todos los archivos para la nueva funcionalidad de  pero aún no ha ejecutado los siguientes pasos críticos:
-1.  Reiniciar el servidor backend para aplicar la migración y cargar el nuevo código.
-2.  Ejecutar el trabajo de sincronización para .
-3.  Probar los nuevos endpoints y las nuevas páginas de la interfaz de usuario.</analysis>
+El agente no ha olvidado nada. Está a mitad de la depuración de un bug introducido por la última modificación solicitada por el usuario. El siguiente paso es analizar la definición de la vista SQL.</analysis>
