@@ -473,6 +473,120 @@ async def get_stock_locations(search: Optional[str] = None):
         return {"locations": [], "error": str(e)}
 
 
+@api_router.get("/stock-quants")
+async def get_stock_quants(
+    product_id: Optional[int] = None,
+    location_id: Optional[int] = None,
+    page: int = 1,
+    page_size: int = 50,
+):
+    """Get stock quants (GLOBAL) with pagination."""
+    try:
+        with get_pg_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                conditions = ["company_key = 'GLOBAL'"]
+                params = []
+                if product_id:
+                    conditions.append("product_id = %s")
+                    params.append(product_id)
+                if location_id:
+                    conditions.append("location_id = %s")
+                    params.append(location_id)
+                where = " AND ".join(conditions)
+                offset = (page - 1) * page_size
+                cur.execute(f"SELECT count(*) as total FROM odoo.stock_quant WHERE {where}", params)
+                total = cur.fetchone()["total"]
+                cur.execute(f"""
+                    SELECT odoo_id, product_id, location_id, qty, reserved_qty, in_date, odoo_write_date
+                    FROM odoo.stock_quant WHERE {where}
+                    ORDER BY odoo_write_date DESC NULLS LAST
+                    LIMIT %s OFFSET %s
+                """, params + [page_size, offset])
+                rows = cur.fetchall()
+                for r in rows:
+                    for k in ('qty', 'reserved_qty'):
+                        if r[k] is not None: r[k] = float(r[k])
+                    for k in ('in_date', 'odoo_write_date'):
+                        if r[k] is not None: r[k] = r[k].isoformat()
+        return {"rows": rows, "total": total, "page": page, "page_size": page_size,
+                "total_pages": (total + page_size - 1) // page_size if total > 0 else 0}
+    except Exception as e:
+        return {"rows": [], "total": 0, "page": 1, "page_size": page_size, "total_pages": 0, "error": str(e)}
+
+
+@api_router.get("/stock-by-product")
+async def get_stock_by_product(
+    only_available: Optional[bool] = None,
+    page: int = 1,
+    page_size: int = 50,
+):
+    """Get stock aggregated by product from internal locations."""
+    try:
+        with get_pg_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                where = "WHERE available_qty > 0" if only_available else ""
+                cur.execute(f"SELECT count(*) as total FROM odoo.v_stock_by_product {where}")
+                total = cur.fetchone()["total"]
+                offset = (page - 1) * page_size
+                cur.execute(f"""
+                    SELECT product_id, qty, reserved_qty, available_qty
+                    FROM odoo.v_stock_by_product {where}
+                    ORDER BY available_qty DESC
+                    LIMIT %s OFFSET %s
+                """, (page_size, offset))
+                rows = cur.fetchall()
+                for r in rows:
+                    for k in ('qty', 'reserved_qty', 'available_qty'):
+                        if r[k] is not None: r[k] = float(r[k])
+        return {"rows": rows, "total": total, "page": page, "page_size": page_size,
+                "total_pages": (total + page_size - 1) // page_size if total > 0 else 0}
+    except Exception as e:
+        return {"rows": [], "total": 0, "page": 1, "page_size": page_size, "total_pages": 0, "error": str(e)}
+
+
+@api_router.get("/stock-by-location")
+async def get_stock_by_location(
+    location_id: Optional[int] = None,
+    only_available: Optional[bool] = None,
+    page: int = 1,
+    page_size: int = 50,
+):
+    """Get stock by product+location from internal locations, with location name."""
+    try:
+        with get_pg_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                conditions = []
+                params = []
+                if location_id:
+                    conditions.append("v.location_id = %s")
+                    params.append(location_id)
+                if only_available:
+                    conditions.append("v.available_qty > 0")
+                where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+                cur.execute(f"""
+                    SELECT count(*) as total FROM odoo.v_stock_by_product_location v {where}
+                """, params)
+                total = cur.fetchone()["total"]
+                offset = (page - 1) * page_size
+                cur.execute(f"""
+                    SELECT v.product_id, v.location_id, v.available_qty, v.qty, v.reserved_qty,
+                           sl.x_nombre as location_name, sl.name as location_raw_name
+                    FROM odoo.v_stock_by_product_location v
+                    LEFT JOIN odoo.stock_location sl ON sl.company_key='GLOBAL' AND sl.odoo_id=v.location_id
+                    {where}
+                    ORDER BY v.available_qty DESC
+                    LIMIT %s OFFSET %s
+                """, params + [page_size, offset])
+                rows = cur.fetchall()
+                for r in rows:
+                    for k in ('qty', 'reserved_qty', 'available_qty'):
+                        if r[k] is not None: r[k] = float(r[k])
+        return {"rows": rows, "total": total, "page": page, "page_size": page_size,
+                "total_pages": (total + page_size - 1) // page_size if total > 0 else 0}
+    except Exception as e:
+        return {"rows": [], "total": 0, "page": 1, "page_size": page_size, "total_pages": 0, "error": str(e)}
+
+
 @api_router.get("/pos-lines-full")
 async def get_pos_lines_full(
     company_key: Optional[str] = None,
