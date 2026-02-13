@@ -52,23 +52,28 @@ class SyncScheduler:
         try:
             with conn.cursor() as cur:
                 cur.execute("""
-                    SELECT job_code, run_time, last_run_at
+                    SELECT job_code, schedule_type, run_time, last_run_at
                     FROM odoo.sync_job
-                    WHERE enabled = true AND schedule_type = 'DAILY'
+                    WHERE enabled = true
                 """)
                 jobs = cur.fetchall()
         finally:
             conn.close()
 
         jobs_to_run = []
-        for job_code, run_time, last_run_at in jobs:
-            job_time_str = run_time.strftime('%H:%M') if run_time else None
-            if job_time_str != current_time:
-                continue
-            # Don't run if already ran within last hour
-            if last_run_at and (now - last_run_at) < timedelta(hours=1):
-                continue
-            jobs_to_run.append(job_code)
+        for job_code, schedule_type, run_time, last_run_at in jobs:
+            if schedule_type == 'HOURLY':
+                # Run if never ran or last run > 1 hour ago
+                if last_run_at and (now - last_run_at) < timedelta(hours=1):
+                    continue
+                jobs_to_run.append(job_code)
+            elif schedule_type == 'DAILY':
+                job_time_str = run_time.strftime('%H:%M') if run_time else None
+                if job_time_str != current_time:
+                    continue
+                if last_run_at and (now - last_run_at) < timedelta(hours=1):
+                    continue
+                jobs_to_run.append(job_code)
 
         if jobs_to_run:
             logger.info(f"Scheduler triggering jobs: {jobs_to_run}")
