@@ -523,13 +523,18 @@ INSERT INTO odoo.sync_job (job_code, run_time, priority)
 VALUES
     ('RES_COMPANY',      '23:00', 10),
     ('STOCK_LOCATIONS',  '23:08', 15),
-    ('STOCK_QUANTS',     '23:15', 17),
     ('RES_USERS',        '23:02', 20),
     ('RES_PARTNER',      '23:05', 30),
     ('PRODUCTS',         '23:10', 40),
     ('ATTRIBUTES',       '23:12', 50),
     ('POS_ORDERS',       '23:20', 60)
 ON CONFLICT (job_code) DO NOTHING;
+
+INSERT INTO odoo.sync_job (job_code, enabled, schedule_type, run_time, priority, mode, chunk_size, company_scope)
+VALUES ('STOCK_QUANTS', true, 'DAILY', '23:15', 17, 'INCREMENTAL', 5000, 'GLOBAL')
+ON CONFLICT (job_code) DO UPDATE SET
+    chunk_size = 5000,
+    company_scope = 'GLOBAL';
 """
 
 # List of all odoo tables (for status queries)
