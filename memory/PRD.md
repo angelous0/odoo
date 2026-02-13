@@ -1,48 +1,56 @@
-# Odoo ODS - Operational Data Store
+# Odoo ODS - Product Requirements Document
 
 ## Problema Original
-Crear un Operational Data Store (ODS) en PostgreSQL para replicar datos de Odoo 10 vía XML-RPC. El objetivo es crear un espejo de datos de Odoo en un esquema `odoo` para alimentar futuros sistemas de CRM, Finanzas y Producción.
+Crear un Operational Data Store (ODS) en PostgreSQL para replicar datos de una instancia de Odoo 10. El objetivo es crear un espejo de los datos de Odoo en un esquema "odoo" para alimentar futuros sistemas de CRM, Finanzas y Producción.
 
 ## Arquitectura
-- **Backend:** FastAPI + PostgreSQL (psycopg2-binary) + XML-RPC
+- **Backend:** FastAPI + PostgreSQL (psycopg2) + XML-RPC (Odoo 10)
 - **Frontend:** React + TailwindCSS + Shadcn/UI
-- **Datos:** Modelo multi-empresa (`company_key`): maestros=GLOBAL, POS=por empresa
+- **Sync:** Motor de sincronización incremental/completa con scheduler (DAILY/HOURLY)
+- **Multi-empresa:** Ambission y ProyectoModa
 
 ## Fases Completadas
 
-### Fase 1 - Schema & Vistas ✅
-Schema `odoo` con tablas: res_company, res_users, res_partner, product_template, product_product, atributos, pos_order, pos_order_line. Vistas: v_product_variant_flat, v_partner_account_map, v_pos_order_enriched, v_pos_line_full.
+### Fase 1: Schema & Vistas (COMPLETADO)
+- Schema `odoo` con tablas para maestros, productos, atributos, POS
+- Vistas SQL: v_product_variant_flat, v_partner_account_map, v_pos_order_enriched, v_pos_line_full
 
-### Fase 2 - Sync Engine ✅  
-Motor de sincronización incremental vía XML-RPC (write_date cursor). Batch upserts con execute_values. Paginación por ID. Advisory lock. Scheduler. +1.25M registros sincronizados.
+### Fase 2: Sync Engine (COMPLETADO)
+- Motor incremental via XML-RPC con batch upserts
+- Advisory locks para prevenir concurrencia
+- Soporte multi-empresa
 
-### Fase 3 - Stock Locations ✅
-Tabla odoo.stock_location + sync. 52 ubicaciones sincronizadas.
+### Fase 3: Stock Locations (COMPLETADO)
+- Tabla odoo.stock_location sincronizada
 
-### Fase 4 - UI de Validación ✅
-Dashboard, Historial, Panel de control, Locations, POS Lines Full, Health.
+### Fase 4: UI y Vistas de Validación (COMPLETADO)
+- Dashboard, Historial, Locations, POS Lines, Health
+- Feedback visual: toasts, barras de progreso, auto-refresco
 
-### Fase 5 - Stock Actual (stock.quant) ✅ [13-Feb-2026]
-- **Tabla** `odoo.stock_quant`: PK(company_key, odoo_id), campos qty, reserved_qty, in_date, audit fields
-- **Sync** `STOCK_QUANTS`: chunk_size=5000, company_scope=GLOBAL. Detección automática de campo qty/quantity y reserved_quantity. Inserción progresiva por lotes. **1,042,549 registros sincronizados.**
-- **Vistas SQL**:
-  - `v_stock_by_product_location`: stock por producto+ubicación (solo internal/active). 16,811 filas.
-  - `v_stock_by_product`: stock agregado por producto. 8,046 productos con stock.
-- **UI**: 3 páginas nuevas:
-  - `/stock-quants`: tabla paginada con filtros product_id/location_id
-  - `/stock-by-product`: stock disponible por producto con toggle "Solo disponible"
-  - `/stock-by-location`: stock por tienda con nombre de tienda vía lookup
+### Fase 5: Stock Actual (COMPLETADO)
+- stock.quant sincronizado (1M+ registros)
+- Vistas v_stock_by_product y v_stock_by_product_location
+- Páginas: Stock Quants, Stock x Producto, Stock x Tienda
+
+### Fix: Campo tipo con x_tipo_resumen (COMPLETADO - 13 Feb 2026)
+- Sync de product_template usa x_tipo_resumen del modelo product.tipo
+- Vistas de stock actualizadas para incluir product_name, marca, tipo via JOINs
+- Endpoints stock-by-product y stock-by-location retornan info de producto
+- Frontend actualizado en todas las páginas de stock
+- Testing: 100% backend y frontend
+
+## Tablas Principales
+- odoo.sync_job, odoo.sync_run_log
+- odoo.res_company, odoo.res_users, odoo.res_partner
+- odoo.product_template, odoo.product_product
+- odoo.product_attribute, odoo.product_attribute_value
+- odoo.pos_order, odoo.pos_order_line
+- odoo.stock_location, odoo.stock_quant
 
 ## Endpoints API
-- `POST /api/sync/run` - Ejecutar sync manual
-- `GET /api/sync/status` - Estado de jobs y logs
-- `GET /api/health` - Salud del sistema (incluye stock_quant)
-- `GET /api/stock-quants` - Quants paginados con filtros
-- `GET /api/stock-by-product` - Stock agregado por producto
-- `GET /api/stock-by-location` - Stock por producto+tienda
-- `GET /api/pos-lines-full` - Líneas POS enriquecidas
-- `GET /api/locations` - Ubicaciones
-- `GET /api/sync-logs` - Historial de sync
+- POST /api/sync/run, GET /api/sync/status
+- GET /api/health, GET /api/pos-lines-full
+- GET /api/stock-quants, GET /api/stock-by-product, GET /api/stock-by-location
+- GET /api/stock-locations, POST /api/migrate
 
-## Backlog
-No hay tareas pendientes adicionales.
+## Estado: Proyecto funcionalmente completo
