@@ -503,37 +503,31 @@ class SyncService:
                         'create_date','create_uid','write_date','write_uid']
         recs = self._paginate(uid, pw, 'product.template', domain, tmpl_fields, cs)
 
-        # Lookup x_tipo_resumen from related model
-        tipo_ids = set()
-        for r in recs:
-            tid = xid(r.get('x_tipo'))
-            if tid:
-                tipo_ids.add(tid)
-        tipo_map = {}  # id -> x_tipo_resumen or name
-        if tipo_ids:
-            try:
-                tipo_recs = self.client.read(self.odoo_db, uid, pw, 'product.tipo',
-                                             list(tipo_ids), fields=['id', 'x_tipo_resumen', 'name'])
-                for t in tipo_recs:
-                    resumen = t.get('x_tipo_resumen')
-                    name = t.get('name') or ''
-                    if resumen and resumen is not False:
-                        tipo_map[t['id']] = resumen
-                    else:
-                        tipo_map[t['id']] = name
-                logger.info(f"  product.tipo lookup: {len(tipo_map)} tipos loaded (x_tipo_resumen preferred)")
-            except Exception as e:
-                logger.warning(f"  product.tipo lookup failed ({e}), falling back to x_tipo name")
-                for r in recs:
-                    val = r.get('x_tipo')
-                    if isinstance(val, (list, tuple)) and len(val) == 2:
-                        tipo_map[val[0]] = val[1]
+        # Lookup x_tipo_resumen from product.tipo model (name -> x_tipo_resumen)
+        # x_tipo comes as a string (name) in this Odoo 10 instance
+        tipo_name_map = {}
+        try:
+            tipo_recs = self.client.search_read(self.odoo_db, uid, pw, 'product.tipo',
+                                                [], ['id', 'name', 'x_tipo_resumen'], limit=200)
+            for t in tipo_recs:
+                name = t.get('name') or ''
+                resumen = t.get('x_tipo_resumen')
+                if resumen and resumen is not False:
+                    tipo_name_map[name] = resumen
+            logger.info(f"  product.tipo name->resumen mapping: {len(tipo_name_map)} entries")
+        except Exception as e:
+            logger.warning(f"  product.tipo lookup failed ({e}), using x_tipo as-is")
 
         def get_tipo(r):
-            tid = xid(r.get('x_tipo'))
-            if tid and tid in tipo_map:
-                return tipo_map[tid]
-            return xm2o_name(r.get('x_tipo'))
+            val = r.get('x_tipo')
+            if val is False or val is None:
+                return None
+            if isinstance(val, str):
+                return tipo_name_map.get(val, val)
+            if isinstance(val, (list, tuple)) and len(val) >= 2:
+                name = str(val[1])
+                return tipo_name_map.get(name, name)
+            return str(val)
 
         vals = [
             (r['id'], xtxt(r.get('name')), xbool(r.get('active')),
