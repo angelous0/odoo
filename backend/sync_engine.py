@@ -414,24 +414,24 @@ class SyncService:
 
     def _sync_products(self, mode, cursor, cs):
         uid, pw = self._auth('Ambission')
-        # Detect custom fields (x_ prefix or plain)
-        custom_map = self._detect_product_fields(uid, pw)
 
         base = [('sale_ok','=',True),('purchase_ok','=',False),('active','=',True)]
         domain = self._inc_domain(base, cursor, mode)
+        # x_marca/x_tipo are char fields; tela/entalle/hilo are many2one (return [id,name])
         tmpl_fields = ['id','name','active','sale_ok','purchase_ok','list_price',
-                        'create_date','create_uid','write_date','write_uid'] + list(custom_map.values())
+                        'x_marca','x_tipo','tela','entalle','hilo',
+                        'create_date','create_uid','write_date','write_uid']
         recs = self._paginate(uid, pw, 'product.template', domain, tmpl_fields, cs)
 
         vals = [
             (r['id'], xtxt(r.get('name')), xbool(r.get('active')),
              xbool(r.get('sale_ok')), xbool(r.get('purchase_ok')), xnum(r.get('list_price')),
-             xtxt(r.get(custom_map.get('marca','marca'))),
-             xtxt(r.get(custom_map.get('tipo','tipo'))),
-             xtxt(r.get(custom_map.get('tela','tela'))),
-             xtxt(r.get(custom_map.get('entalle','entalle'))),
-             xtxt(r.get(custom_map.get('tel','tel'))),
-             xtxt(r.get(custom_map.get('hilo','hilo'))),
+             xtxt(r.get('x_marca')),          # char field
+             xtxt(r.get('x_tipo')),            # char field
+             xm2o_name(r.get('tela')),         # many2one -> extract name
+             xm2o_name(r.get('entalle')),      # many2one -> extract name
+             None,                              # tel: not available
+             xm2o_name(r.get('hilo')),         # many2one -> extract name
              xdt(r.get('write_date')), xdt(r.get('create_date')),
              xid(r.get('create_uid')), xid(r.get('write_uid')))
             for r in recs
