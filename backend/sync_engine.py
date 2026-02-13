@@ -12,7 +12,7 @@ from odoo_client import OdooClient
 
 logger = logging.getLogger(__name__)
 
-MASTER_JOBS = ['RES_COMPANY', 'RES_USERS', 'RES_PARTNER', 'PRODUCTS', 'ATTRIBUTES', 'STOCK_LOCATIONS']
+MASTER_JOBS = ['RES_COMPANY', 'RES_USERS', 'RES_PARTNER', 'PRODUCTS', 'ATTRIBUTES', 'STOCK_LOCATIONS', 'STOCK_QUANTS']
 POS_JOBS = ['POS_ORDERS']
 ADVISORY_LOCK_ID = 777777
 
@@ -283,6 +283,7 @@ class SyncService:
                 'PRODUCTS': self._sync_products,
                 'ATTRIBUTES': self._sync_attributes,
                 'STOCK_LOCATIONS': self._sync_stock_locations,
+                'STOCK_QUANTS': self._sync_stock_quants,
                 'POS_ORDERS': self._sync_pos_orders,
             }
             h = handlers[jc]
