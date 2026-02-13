@@ -319,6 +319,32 @@ class SyncService:
         n = self._batch_exec(sql, template, vals)
         return n, self._max_wd(recs, cursor)
 
+    def _sync_stock_locations(self, mode, cursor, cs):
+        uid, pw = self._auth('Ambission')
+        domain = self._inc_domain([], cursor, mode)
+        fields = ['id', 'name', 'x_nombre', 'complete_name', 'usage', 'active',
+                  'location_id', 'company_id', 'create_date', 'create_uid', 'write_date', 'write_uid']
+        recs = self._paginate(uid, pw, 'stock.location', domain, fields, cs)
+        vals = [
+            (r['id'], xtxt(r.get('name')), xtxt(r.get('x_nombre')), xtxt(r.get('complete_name')),
+             xtxt(r.get('usage')), xbool(r.get('active')),
+             xid(r.get('location_id')), xid(r.get('company_id')),
+             xdt(r.get('create_date')), xid(r.get('create_uid')),
+             xdt(r.get('write_date')), xid(r.get('write_uid')))
+            for r in recs
+        ]
+        sql = """INSERT INTO odoo.stock_location (company_key,odoo_id,name,x_nombre,complete_name,usage,active,
+                 location_id,company_id,odoo_create_date,odoo_create_uid,odoo_write_date,odoo_write_uid,synced_at)
+                 VALUES %s ON CONFLICT (company_key,odoo_id) DO UPDATE SET
+                 name=EXCLUDED.name,x_nombre=EXCLUDED.x_nombre,complete_name=EXCLUDED.complete_name,
+                 usage=EXCLUDED.usage,active=EXCLUDED.active,location_id=EXCLUDED.location_id,
+                 company_id=EXCLUDED.company_id,odoo_create_date=EXCLUDED.odoo_create_date,
+                 odoo_create_uid=EXCLUDED.odoo_create_uid,odoo_write_date=EXCLUDED.odoo_write_date,
+                 odoo_write_uid=EXCLUDED.odoo_write_uid,synced_at=now()"""
+        template = "('GLOBAL',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())"
+        n = self._batch_exec(sql, template, vals)
+        return n, self._max_wd(recs, cursor)
+
     def _sync_res_users(self, mode, cursor, cs):
         uid, pw = self._auth('Ambission')
         domain = self._inc_domain([], cursor, mode)
