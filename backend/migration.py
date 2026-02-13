@@ -321,6 +321,10 @@ CREATE INDEX IF NOT EXISTS idx_pos_order_line_product
 -- H) VISTAS PARA FUTURO CRM
 -- ============================================================
 
+-- Drop dependent views first (order matters)
+DROP VIEW IF EXISTS odoo.v_pos_line_full CASCADE;
+DROP VIEW IF EXISTS odoo.v_pos_order_enriched CASCADE;
+
 -- H1) v_partner_account_map
 CREATE OR REPLACE VIEW odoo.v_partner_account_map AS
 SELECT
