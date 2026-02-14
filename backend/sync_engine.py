@@ -665,65 +665,78 @@ class SyncService:
 
         # ID-based pagination (stable, no duplicates)
         last_id = 0
+        batch_errors = 0
         while True:
-            page_domain = domain + [('id', '>', last_id)]
-            orders = self.client.search_read(self.odoo_db, uid, pw, 'pos.order', page_domain, order_fields,
-                                             limit=cs, offset=0, order='id asc', context=ctx)
-            if not orders:
-                break
+            try:
+                page_domain = domain + [('id', '>', last_id)]
+                orders = self.client.search_read(self.odoo_db, uid, pw, 'pos.order', page_domain, order_fields,
+                                                 limit=cs, offset=0, order='id asc', context=ctx)
+                if not orders:
+                    break
 
-            last_id = max(r['id'] for r in orders)
-            logger.info(f"  POS orders batch: {len(orders)} (last_id={last_id})")
+                last_id = max(r['id'] for r in orders)
+                logger.info(f"  POS orders batch: {len(orders)} (last_id={last_id})")
 
-            o_vals = [
-                (ck, r['id'], xtxt(r.get('name')), xdt(r.get('date_order')),
-                 xid(r.get('partner_id')), xid(r.get('user_id')),
-                 xnum(r.get('amount_total')), xnum(r.get('amount_tax')),
-                 xtxt(r.get('state')),
-                 xbool_nullable(r.get('is_cancel')), xbool_nullable(r.get('order_cancel')),
-                 xid(r.get('x_cliente_principal')), xbool_nullable(r.get('reserva')),
-                 xid(r.get('reserva_use_id')),
-                 xdt(r.get('write_date')), xdt(r.get('create_date')),
-                 xid(r.get('create_uid')), xid(r.get('write_uid')))
-                for r in orders
-            ]
-            o_sql = """INSERT INTO odoo.pos_order (company_key,odoo_id,name,date_order,partner_id,user_id,
-                       amount_total,amount_tax,state,is_cancel,order_cancel,
-                       x_cliente_principal,reserva,reserva_use_id,
-                       odoo_write_date,odoo_create_date,odoo_create_uid,odoo_write_uid,synced_at)
-                       VALUES %s ON CONFLICT (company_key,odoo_id) DO UPDATE SET
-                       name=EXCLUDED.name,date_order=EXCLUDED.date_order,partner_id=EXCLUDED.partner_id,
-                       user_id=EXCLUDED.user_id,amount_total=EXCLUDED.amount_total,amount_tax=EXCLUDED.amount_tax,
-                       state=EXCLUDED.state,is_cancel=EXCLUDED.is_cancel,order_cancel=EXCLUDED.order_cancel,
-                       x_cliente_principal=EXCLUDED.x_cliente_principal,reserva=EXCLUDED.reserva,
-                       reserva_use_id=EXCLUDED.reserva_use_id,
-                       odoo_write_date=EXCLUDED.odoo_write_date,odoo_create_date=EXCLUDED.odoo_create_date,
-                       odoo_create_uid=EXCLUDED.odoo_create_uid,odoo_write_uid=EXCLUDED.odoo_write_uid,synced_at=now()"""
-            total_orders += self._batch_exec(o_sql, "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())", o_vals)
-            max_w = self._max_wd(orders, max_w)
-
-            # Lines for this batch
-            oids = [r['id'] for r in orders]
-            if oids:
-                lines = self._paginate(uid, pw, 'pos.order.line', [('order_id', 'in', oids)],
-                                       ['id', 'order_id', 'product_id', 'qty', 'price_unit', 'discount', 'price_subtotal', 'write_date'], cs)
-                l_vals = [
-                    (ck, l['id'], xid(l.get('order_id')), xid(l.get('product_id')),
-                     xnum(l.get('qty')), xnum(l.get('price_unit')),
-                     xnum(l.get('discount')), xnum(l.get('price_subtotal')),
-                     xdt(l.get('write_date')))
-                    for l in lines
+                o_vals = [
+                    (ck, r['id'], xtxt(r.get('name')), xdt(r.get('date_order')),
+                     xid(r.get('partner_id')), xid(r.get('user_id')),
+                     xnum(r.get('amount_total')), xnum(r.get('amount_tax')),
+                     xtxt(r.get('state')),
+                     xbool_nullable(r.get('is_cancel')), xbool_nullable(r.get('order_cancel')),
+                     xid(r.get('x_cliente_principal')), xbool_nullable(r.get('reserva')),
+                     xid(r.get('reserva_use_id')),
+                     xdt(r.get('write_date')), xdt(r.get('create_date')),
+                     xid(r.get('create_uid')), xid(r.get('write_uid')))
+                    for r in orders
                 ]
-                l_sql = """INSERT INTO odoo.pos_order_line (company_key,odoo_id,order_id,product_id,qty,price_unit,
-                           discount,price_subtotal,odoo_write_date,synced_at)
+                o_sql = """INSERT INTO odoo.pos_order (company_key,odoo_id,name,date_order,partner_id,user_id,
+                           amount_total,amount_tax,state,is_cancel,order_cancel,
+                           x_cliente_principal,reserva,reserva_use_id,
+                           odoo_write_date,odoo_create_date,odoo_create_uid,odoo_write_uid,synced_at)
                            VALUES %s ON CONFLICT (company_key,odoo_id) DO UPDATE SET
-                           order_id=EXCLUDED.order_id,product_id=EXCLUDED.product_id,qty=EXCLUDED.qty,
-                           price_unit=EXCLUDED.price_unit,discount=EXCLUDED.discount,
-                           price_subtotal=EXCLUDED.price_subtotal,odoo_write_date=EXCLUDED.odoo_write_date,synced_at=now()"""
-                total_lines += self._batch_exec(l_sql, "(%s,%s,%s,%s,%s,%s,%s,%s,%s,now())", l_vals)
+                           name=EXCLUDED.name,date_order=EXCLUDED.date_order,partner_id=EXCLUDED.partner_id,
+                           user_id=EXCLUDED.user_id,amount_total=EXCLUDED.amount_total,amount_tax=EXCLUDED.amount_tax,
+                           state=EXCLUDED.state,is_cancel=EXCLUDED.is_cancel,order_cancel=EXCLUDED.order_cancel,
+                           x_cliente_principal=EXCLUDED.x_cliente_principal,reserva=EXCLUDED.reserva,
+                           reserva_use_id=EXCLUDED.reserva_use_id,
+                           odoo_write_date=EXCLUDED.odoo_write_date,odoo_create_date=EXCLUDED.odoo_create_date,
+                           odoo_create_uid=EXCLUDED.odoo_create_uid,odoo_write_uid=EXCLUDED.odoo_write_uid,synced_at=now()"""
+                total_orders += self._batch_exec(o_sql, "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())", o_vals)
+                max_w = self._max_wd(orders, max_w)
 
-            if len(orders) < cs:
-                break
+                # Lines for this batch
+                oids = [r['id'] for r in orders]
+                if oids:
+                    lines = self._paginate(uid, pw, 'pos.order.line', [('order_id', 'in', oids)],
+                                           ['id', 'order_id', 'product_id', 'qty', 'price_unit', 'discount', 'price_subtotal', 'write_date'], cs)
+                    l_vals = [
+                        (ck, l['id'], xid(l.get('order_id')), xid(l.get('product_id')),
+                         xnum(l.get('qty')), xnum(l.get('price_unit')),
+                         xnum(l.get('discount')), xnum(l.get('price_subtotal')),
+                         xdt(l.get('write_date')))
+                        for l in lines
+                    ]
+                    l_sql = """INSERT INTO odoo.pos_order_line (company_key,odoo_id,order_id,product_id,qty,price_unit,
+                               discount,price_subtotal,odoo_write_date,synced_at)
+                               VALUES %s ON CONFLICT (company_key,odoo_id) DO UPDATE SET
+                               order_id=EXCLUDED.order_id,product_id=EXCLUDED.product_id,qty=EXCLUDED.qty,
+                               price_unit=EXCLUDED.price_unit,discount=EXCLUDED.discount,
+                               price_subtotal=EXCLUDED.price_subtotal,odoo_write_date=EXCLUDED.odoo_write_date,synced_at=now()"""
+                    total_lines += self._batch_exec(l_sql, "(%s,%s,%s,%s,%s,%s,%s,%s,%s,now())", l_vals)
+
+                batch_errors = 0  # reset on success
+                if len(orders) < cs:
+                    break
+                time.sleep(0.3)  # gentle on Odoo server
+
+            except Exception as e:
+                batch_errors += 1
+                if batch_errors >= 3:
+                    logger.error(f"  POS batch failed 3 times at last_id={last_id}, aborting: {e}")
+                    raise
+                wait = 30 * batch_errors
+                logger.warning(f"  POS batch error at last_id={last_id} ({batch_errors}/3), retrying in {wait}s: {e}")
+                time.sleep(wait)
 
         return total_orders + total_lines, max_w
 
