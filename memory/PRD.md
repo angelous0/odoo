@@ -1,22 +1,27 @@
 # Odoo ODS - Product Requirements Document
 
 ## Problema Original
-Crear un Operational Data Store (ODS) en PostgreSQL para replicar datos de Odoo 10 via XML-RPC.
+Crear un ODS en PostgreSQL para replicar datos de Odoo 10 via XML-RPC.
 
 ## Arquitectura
 - **Backend:** FastAPI + PostgreSQL (psycopg2) + XML-RPC (Odoo 10)
 - **Frontend:** React + TailwindCSS + Shadcn/UI
 - **Sync:** Motor incremental/completa con scheduler (DAILY/HOURLY)
 
-## Fases Completadas (1-5)
-- Schema odoo, sync engine, stock locations, UI, stock actual (1M+ quants)
+## Fases Completadas (1-5): Todas
 
-## Fix: Campos resumen en productos (13 Feb 2026)
-- **tipo**: usa `x_tipo_resumen` de product.tipo (ej: "Bermuda Cargo" → "Short Denim")
-- **entalle**: usa `x_entalle` de product.entalle (ej: "Regular Fit" → "Regular", "Slim Fit" → "Slim")
-- **tela**: usa `x_tela` de product.tela (ej: "Jersey 24/1" → "Algodón", "Polelina" → "Popelina")
-- Función genérica `_load_resumen_map` y `_resolve` para los 3 campos
-- Vistas SQL de stock incluyen product_name, marca, tipo via JOINs
+## Cambios recientes (14 Feb 2026)
+
+### Fix: Campos resumen en productos
+- **tipo**: usa `x_tipo_resumen` de product.tipo
+- **entalle**: usa `x_entalle` de product.entalle
+- **tela**: usa `x_tela` de product.tela
+
+### Fix: Resiliencia del sync ante 502
+- OdooClient: 6 reintentos con backoff exponencial (max 60s), reconexión en 502/503
+- POS sync: manejo de errores por batch con 3 reintentos (30s entre cada uno)
+- Pausa de 0.3s entre batches para reducir carga en Odoo
+- Resultado: Ambission completó 129,200 órdenes sin interrupción pese a múltiples 502
 
 ## Endpoints API
 - POST /api/sync/run, GET /api/sync/status, GET /api/health
