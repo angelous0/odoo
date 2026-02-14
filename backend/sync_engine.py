@@ -8,6 +8,7 @@ import logging
 import psycopg2
 from psycopg2.extras import execute_values
 from datetime import datetime, timezone
+import time
 from odoo_client import OdooClient
 
 logger = logging.getLogger(__name__)
