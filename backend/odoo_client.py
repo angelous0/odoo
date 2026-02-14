@@ -60,20 +60,24 @@ class OdooClient:
                     raise
 
     def execute_kw(self, db, uid, password, model, method, args=None, kwargs=None):
-        """Execute Odoo method with retry and backoff."""
+        """Execute Odoo method with retry and backoff (extra patience for 502/503)."""
         args = args or []
         kwargs = kwargs or {}
-        for attempt in range(3):
+        max_attempts = 6
+        for attempt in range(max_attempts):
             try:
                 result = self.object.execute_kw(db, uid, password, model, method, args, kwargs)
                 return result
             except Exception as e:
-                if attempt < 2:
-                    wait = 2 ** (attempt + 1)
-                    logger.warning(f"execute_kw {model}.{method} attempt {attempt+1} failed: {e}. Retrying in {wait}s...")
+                is_gateway = '502' in str(e) or '503' in str(e)
+                if attempt < max_attempts - 1:
+                    wait = min(2 ** (attempt + 1), 60) if is_gateway else 2 ** (attempt + 1)
+                    logger.warning(f"execute_kw {model}.{method} attempt {attempt+1}/{max_attempts} failed: {e}. Retrying in {wait}s...")
                     time.sleep(wait)
+                    if is_gateway:
+                        self._object = None  # force reconnect
                 else:
-                    logger.error(f"execute_kw {model}.{method} failed after 3 attempts: {e}")
+                    logger.error(f"execute_kw {model}.{method} failed after {max_attempts} attempts: {e}")
                     raise
 
     def search_read(self, db, uid, password, model, domain, fields, limit=0, offset=0, order=None, context=None):
