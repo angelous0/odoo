@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
-import { RefreshCw, BarChart3, ChevronLeft, ChevronRight, Filter } from "lucide-react";
+import { RefreshCw, BarChart3, ChevronLeft, ChevronRight, Filter, Archive } from "lucide-react";
 
 const fmtNum = (v, d = 2) => v === null || v === undefined ? "—" : Number(v).toLocaleString("es-AR", { minimumFractionDigits: d, maximumFractionDigits: d });
 
@@ -17,19 +17,21 @@ export default function StockByProductPage({ api }) {
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [onlyAvailable, setOnlyAvailable] = useState(true);
+  const [includeArchived, setIncludeArchived] = useState(false);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
       const params = { page, page_size: 50 };
       if (onlyAvailable) params.only_available = true;
+      if (includeArchived) params.include_archived = true;
       const res = await axios.get(`${api}/stock-by-product`, { params });
       setRows(res.data.rows || []);
       setTotal(res.data.total || 0);
       setTotalPages(res.data.total_pages || 0);
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
-  }, [api, page, onlyAvailable]);
+  }, [api, page, onlyAvailable, includeArchived]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -51,6 +53,13 @@ export default function StockByProductPage({ api }) {
             data-testid="toggle-available">
             <Filter className="h-4 w-4 mr-1.5" />
             {onlyAvailable ? "Solo disponible" : "Todos"}
+          </Button>
+          <Button variant={includeArchived ? "default" : "outline"} size="sm"
+            onClick={() => { setIncludeArchived(!includeArchived); setPage(1); }}
+            className={includeArchived ? "shadow-[0_0_10px_rgba(234,179,8,0.3)] bg-yellow-600 hover:bg-yellow-700 text-white" : ""}
+            data-testid="toggle-archived">
+            <Archive className="h-4 w-4 mr-1.5" />
+            {includeArchived ? "Con archivados" : "Sin archivados"}
           </Button>
           <Button variant="outline" size="sm" onClick={fetchData} data-testid="refresh-stock-product-btn">
             <RefreshCw className="h-4 w-4 mr-2" />Refrescar
@@ -82,6 +91,7 @@ export default function StockByProductPage({ api }) {
                   <TableHead className="font-mono text-xs">Producto</TableHead>
                   <TableHead className="font-mono text-xs">Tipo</TableHead>
                   <TableHead className="font-mono text-xs">Marca</TableHead>
+                  {includeArchived && <TableHead className="font-mono text-xs text-center">Estado</TableHead>}
                   <TableHead className="font-mono text-xs text-right">qty</TableHead>
                   <TableHead className="font-mono text-xs text-right">reserved_qty</TableHead>
                   <TableHead className="font-mono text-xs text-right">available_qty</TableHead>
@@ -89,11 +99,20 @@ export default function StockByProductPage({ api }) {
               </TableHeader>
               <TableBody>
                 {rows.map((r) => (
-                  <TableRow key={r.product_id} data-testid={`stock-prod-row-${r.product_id}`}>
+                  <TableRow key={r.product_id} className={r.active === false ? "opacity-60" : ""} data-testid={`stock-prod-row-${r.product_id}`}>
                     <TableCell className="text-right font-mono text-sm text-primary">{r.product_id}</TableCell>
                     <TableCell className="text-sm font-medium truncate max-w-[200px]">{r.product_name || "—"}</TableCell>
                     <TableCell className="text-sm text-muted-foreground">{r.tipo || "—"}</TableCell>
                     <TableCell className="text-sm text-muted-foreground">{r.marca || "—"}</TableCell>
+                    {includeArchived && (
+                      <TableCell className="text-center">
+                        {r.active === false ? (
+                          <Badge variant="outline" className="text-xs border-yellow-500 text-yellow-500" data-testid={`archived-badge-${r.product_id}`}>Archivado</Badge>
+                        ) : (
+                          <Badge variant="outline" className="text-xs border-green-500 text-green-500">Activo</Badge>
+                        )}
+                      </TableCell>
+                    )}
                     <TableCell className="text-right font-mono text-sm">{fmtNum(r.qty)}</TableCell>
                     <TableCell className="text-right font-mono text-sm text-muted-foreground">{fmtNum(r.reserved_qty)}</TableCell>
                     <TableCell className="text-right font-mono text-sm font-medium">
