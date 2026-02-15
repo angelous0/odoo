@@ -535,6 +535,7 @@ async def get_stock_quants(
 @api_router.get("/stock-by-product")
 async def get_stock_by_product(
     only_available: Optional[bool] = None,
+    include_archived: Optional[bool] = False,
     page: int = 1,
     page_size: int = 50,
 ):
@@ -542,12 +543,17 @@ async def get_stock_by_product(
     try:
         with get_pg_conn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                where = "WHERE available_qty > 0" if only_available else ""
+                conditions = []
+                if only_available:
+                    conditions.append("available_qty > 0")
+                if not include_archived:
+                    conditions.append("active = true")
+                where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
                 cur.execute(f"SELECT count(*) as total FROM odoo.v_stock_by_product {where}")
                 total = cur.fetchone()["total"]
                 offset = (page - 1) * page_size
                 cur.execute(f"""
-                    SELECT product_id, product_name, marca, tipo, qty, reserved_qty, available_qty
+                    SELECT product_id, product_name, marca, tipo, active, qty, reserved_qty, available_qty
                     FROM odoo.v_stock_by_product {where}
                     ORDER BY available_qty DESC
                     LIMIT %s OFFSET %s
@@ -566,6 +572,7 @@ async def get_stock_by_product(
 async def get_stock_by_location(
     location_id: Optional[int] = None,
     only_available: Optional[bool] = None,
+    include_archived: Optional[bool] = False,
     page: int = 1,
     page_size: int = 50,
 ):
@@ -580,6 +587,8 @@ async def get_stock_by_location(
                     params.append(location_id)
                 if only_available:
                     conditions.append("v.available_qty > 0")
+                if not include_archived:
+                    conditions.append("v.active = true")
                 where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
                 cur.execute(f"""
                     SELECT count(*) as total FROM odoo.v_stock_by_product_location v {where}
@@ -588,7 +597,7 @@ async def get_stock_by_location(
                 offset = (page - 1) * page_size
                 cur.execute(f"""
                     SELECT v.product_id, v.location_id, v.product_name, v.marca, v.tipo,
-                           v.available_qty, v.qty, v.reserved_qty,
+                           v.active, v.available_qty, v.qty, v.reserved_qty,
                            sl.x_nombre as location_name, sl.name as location_raw_name
                     FROM odoo.v_stock_by_product_location v
                     LEFT JOIN odoo.stock_location sl ON sl.company_key='GLOBAL' AND sl.odoo_id=v.location_id

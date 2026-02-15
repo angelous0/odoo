@@ -553,6 +553,7 @@ SELECT
     pt.name  AS product_name,
     pt.marca,
     pt.tipo,
+    COALESCE(pt.active, true) AS active,
     SUM(sq.qty)          AS qty,
     SUM(sq.reserved_qty) AS reserved_qty,
     SUM(sq.qty) - SUM(sq.reserved_qty) AS available_qty
@@ -566,7 +567,8 @@ LEFT JOIN odoo.product_template pt
 WHERE sq.company_key = 'GLOBAL'
   AND sl.usage = 'internal'
   AND COALESCE(sl.active, true) = true
-GROUP BY sq.product_id, sq.location_id, pt.name, pt.marca, pt.tipo;
+  AND pt.name NOT ILIKE '%paneton%'
+GROUP BY sq.product_id, sq.location_id, pt.name, pt.marca, pt.tipo, pt.active;
 
 -- I2) v_stock_by_product (aggregated across all internal locations, with product info)
 CREATE OR REPLACE VIEW odoo.v_stock_by_product AS
@@ -575,11 +577,12 @@ SELECT
     product_name,
     marca,
     tipo,
+    active,
     SUM(qty)          AS qty,
     SUM(reserved_qty) AS reserved_qty,
     SUM(available_qty) AS available_qty
 FROM odoo.v_stock_by_product_location
-GROUP BY product_id, product_name, marca, tipo;
+GROUP BY product_id, product_name, marca, tipo, active;
 
 -- ============================================================
 -- SEED: Insertar jobs base (idempotente)
