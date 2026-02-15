@@ -568,6 +568,7 @@ WHERE sq.company_key = 'GLOBAL'
   AND sl.usage = 'internal'
   AND COALESCE(sl.active, true) = true
   AND pt.name NOT ILIKE '%paneton%'
+  AND pt.name NOT ILIKE '%publicitario%'
 GROUP BY sq.product_id, sq.location_id, pt.name, pt.marca, pt.tipo, pt.active;
 
 -- I2) v_stock_by_product (aggregated across all internal locations, with product info)
