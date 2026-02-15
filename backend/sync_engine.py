@@ -499,13 +499,16 @@ class SyncService:
     def _sync_products(self, mode, cursor, cs):
         uid, pw = self._auth('Ambission')
 
-        base = [('sale_ok','=',True),('purchase_ok','=',False),('active','=',True)]
+        # Include archived products (active=False) by removing active filter
+        # and using active_test=False context to bypass Odoo's default active filter
+        base = [('sale_ok','=',True),('purchase_ok','=',False)]
         domain = self._inc_domain(base, cursor, mode)
+        ctx_no_active = {'active_test': False}
         # x_marca is char; x_tipo is many2one; tela/entalle/hilo are many2one
         tmpl_fields = ['id','name','active','sale_ok','purchase_ok','list_price',
                         'x_marca','x_tipo','tela','entalle','hilo',
                         'create_date','create_uid','write_date','write_uid']
-        recs = self._paginate(uid, pw, 'product.template', domain, tmpl_fields, cs)
+        recs = self._paginate(uid, pw, 'product.template', domain, tmpl_fields, cs, ctx=ctx_no_active)
 
         # Build name->resumen mappings for tipo, entalle, tela
         def _load_resumen_map(model, resumen_field):
