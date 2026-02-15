@@ -487,6 +487,58 @@ CREATE INDEX IF NOT EXISTS idx_stock_quant_location ON odoo.stock_quant (company
 CREATE INDEX IF NOT EXISTS idx_stock_quant_prod_loc ON odoo.stock_quant (company_key, product_id, location_id);
 
 -- ============================================================
+-- J) CREDIT INVOICES (account.invoice con is_credit=True)
+-- ============================================================
+
+-- J1) odoo.account_invoice_credit (cabecera)
+CREATE TABLE IF NOT EXISTS odoo.account_invoice_credit (
+    company_key      TEXT NOT NULL,
+    odoo_id          INT NOT NULL,
+    number           TEXT NULL,
+    date_invoice     DATE NULL,
+    partner_id       INT NULL,
+    user_id          INT NULL,
+    company_id       INT NULL,
+    state            TEXT NULL,
+    amount_total     NUMERIC(16,2) NULL,
+    amount_residual  NUMERIC(16,2) NULL,
+    payment_term_id  INT NULL,
+    currency_id      INT NULL,
+    odoo_create_date TIMESTAMPTZ NULL,
+    odoo_create_uid  INT NULL,
+    odoo_write_date  TIMESTAMPTZ NULL,
+    odoo_write_uid   INT NULL,
+    synced_at        TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY (company_key, odoo_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_credit_inv_partner   ON odoo.account_invoice_credit (company_key, partner_id);
+CREATE INDEX IF NOT EXISTS idx_credit_inv_date      ON odoo.account_invoice_credit (company_key, date_invoice);
+CREATE INDEX IF NOT EXISTS idx_credit_inv_state     ON odoo.account_invoice_credit (company_key, state);
+
+-- J2) odoo.account_invoice_credit_line (líneas)
+CREATE TABLE IF NOT EXISTS odoo.account_invoice_credit_line (
+    company_key      TEXT NOT NULL,
+    odoo_id          INT NOT NULL,
+    invoice_id       INT NOT NULL,
+    product_id       INT NULL,
+    name             TEXT NULL,
+    quantity         NUMERIC(16,4) NULL,
+    price_unit       NUMERIC(16,4) NULL,
+    discount         NUMERIC(16,4) NULL,
+    price_subtotal   NUMERIC(16,2) NULL,
+    odoo_create_date TIMESTAMPTZ NULL,
+    odoo_create_uid  INT NULL,
+    odoo_write_date  TIMESTAMPTZ NULL,
+    odoo_write_uid   INT NULL,
+    synced_at        TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY (company_key, odoo_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_credit_inv_line_invoice  ON odoo.account_invoice_credit_line (company_key, invoice_id);
+CREATE INDEX IF NOT EXISTS idx_credit_inv_line_product  ON odoo.account_invoice_credit_line (company_key, product_id);
+
+-- ============================================================
 -- I) STOCK VIEWS (after tables exist)
 -- ============================================================
 
@@ -549,6 +601,10 @@ ON CONFLICT (job_code) DO UPDATE SET
     schedule_type = 'HOURLY',
     chunk_size = 5000,
     company_scope = 'GLOBAL';
+
+INSERT INTO odoo.sync_job (job_code, enabled, schedule_type, run_time, priority, mode, chunk_size, company_scope)
+VALUES ('AR_CREDIT_INVOICES', true, 'DAILY', '23:40', 70, 'INCREMENTAL', 2000, 'MULTI')
+ON CONFLICT (job_code) DO NOTHING;
 """
 
 # List of all odoo tables (for status queries)
