@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 
 MASTER_JOBS = ['RES_COMPANY', 'RES_USERS', 'RES_PARTNER', 'PRODUCTS', 'ATTRIBUTES', 'STOCK_LOCATIONS', 'STOCK_QUANTS']
 POS_JOBS = ['POS_ORDERS']
+MULTI_JOBS = ['AR_CREDIT_INVOICES']
 
 
 class SyncScheduler:
@@ -86,5 +87,7 @@ class SyncScheduler:
                         await asyncio.to_thread(svc.run_sync, job_code=jc, target='GLOBAL_ONLY')
                     elif jc in POS_JOBS:
                         await asyncio.to_thread(svc.run_sync, job_code=jc, target='POS_ONLY')
+                    elif jc in MULTI_JOBS:
+                        await asyncio.to_thread(svc.run_sync, job_code=jc)
                 except Exception as e:
                     logger.error(f"Scheduler job {jc} failed: {e}")
