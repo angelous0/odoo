@@ -744,6 +744,118 @@ class SyncService:
 
         return total_orders + total_lines, max_w
 
+    # ================================================================
+    # CREDIT INVOICES (account.invoice con is_credit=True)
+    # ================================================================
+
+    def _sync_credit_invoices(self, ck, mode, cursor, cs):
+        uid, pw = self._auth(ck)
+        ctx, cid = self._company_ctx(ck)
+        base = [('is_credit', '=', True), ('type', '=', 'out_invoice')]
+        if cid:
+            base.append(('company_id', '=', cid))
+        domain = self._inc_domain(base, cursor, mode)
+
+        inv_fields = ['id', 'number', 'date_invoice', 'partner_id', 'user_id',
+                       'company_id', 'state', 'amount_total', 'residual',
+                       'payment_term_id', 'currency_id',
+                       'create_date', 'create_uid', 'write_date', 'write_uid']
+
+        max_w = cursor
+        total_inv = 0
+        total_lines = 0
+
+        last_id = 0
+        batch_errors = 0
+        while True:
+            try:
+                page_domain = domain + [('id', '>', last_id)]
+                invoices = self.client.search_read(self.odoo_db, uid, pw, 'account.invoice',
+                                                   page_domain, inv_fields,
+                                                   limit=cs, offset=0, order='id asc', context=ctx)
+                if not invoices:
+                    break
+
+                last_id = max(r['id'] for r in invoices)
+                logger.info(f"  Credit invoices batch: {len(invoices)} (last_id={last_id})")
+
+                inv_vals = [
+                    (ck, r['id'], xtxt(r.get('number')),
+                     r.get('date_invoice') if r.get('date_invoice') else None,
+                     xid(r.get('partner_id')), xid(r.get('user_id')),
+                     xid(r.get('company_id')), xtxt(r.get('state')),
+                     xnum(r.get('amount_total')), xnum(r.get('residual')),
+                     xid(r.get('payment_term_id')), xid(r.get('currency_id')),
+                     xdt(r.get('create_date')), xid(r.get('create_uid')),
+                     xdt(r.get('write_date')), xid(r.get('write_uid')))
+                    for r in invoices
+                ]
+                inv_sql = """INSERT INTO odoo.account_invoice_credit
+                    (company_key, odoo_id, number, date_invoice, partner_id, user_id,
+                     company_id, state, amount_total, amount_residual,
+                     payment_term_id, currency_id,
+                     odoo_create_date, odoo_create_uid, odoo_write_date, odoo_write_uid, synced_at)
+                    VALUES %s ON CONFLICT (company_key, odoo_id) DO UPDATE SET
+                     number=EXCLUDED.number, date_invoice=EXCLUDED.date_invoice,
+                     partner_id=EXCLUDED.partner_id, user_id=EXCLUDED.user_id,
+                     company_id=EXCLUDED.company_id, state=EXCLUDED.state,
+                     amount_total=EXCLUDED.amount_total, amount_residual=EXCLUDED.amount_residual,
+                     payment_term_id=EXCLUDED.payment_term_id, currency_id=EXCLUDED.currency_id,
+                     odoo_create_date=EXCLUDED.odoo_create_date, odoo_create_uid=EXCLUDED.odoo_create_uid,
+                     odoo_write_date=EXCLUDED.odoo_write_date, odoo_write_uid=EXCLUDED.odoo_write_uid,
+                     synced_at=now()"""
+                total_inv += self._batch_exec(inv_sql,
+                    "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())", inv_vals)
+                max_w = self._max_wd(invoices, max_w)
+
+                # Lines for this batch
+                inv_ids = [r['id'] for r in invoices]
+                if inv_ids:
+                    lines = self._paginate(uid, pw, 'account.invoice.line',
+                        [('invoice_id', 'in', inv_ids)],
+                        ['id', 'invoice_id', 'product_id', 'name', 'quantity',
+                         'price_unit', 'discount', 'price_subtotal',
+                         'create_date', 'create_uid', 'write_date', 'write_uid'], cs)
+                    l_vals = [
+                        (ck, l['id'], xid(l.get('invoice_id')), xid(l.get('product_id')),
+                         xtxt(l.get('name')), xnum(l.get('quantity')),
+                         xnum(l.get('price_unit')), xnum(l.get('discount')),
+                         xnum(l.get('price_subtotal')),
+                         xdt(l.get('create_date')), xid(l.get('create_uid')),
+                         xdt(l.get('write_date')), xid(l.get('write_uid')))
+                        for l in lines
+                    ]
+                    l_sql = """INSERT INTO odoo.account_invoice_credit_line
+                        (company_key, odoo_id, invoice_id, product_id, name, quantity,
+                         price_unit, discount, price_subtotal,
+                         odoo_create_date, odoo_create_uid, odoo_write_date, odoo_write_uid, synced_at)
+                        VALUES %s ON CONFLICT (company_key, odoo_id) DO UPDATE SET
+                         invoice_id=EXCLUDED.invoice_id, product_id=EXCLUDED.product_id,
+                         name=EXCLUDED.name, quantity=EXCLUDED.quantity,
+                         price_unit=EXCLUDED.price_unit, discount=EXCLUDED.discount,
+                         price_subtotal=EXCLUDED.price_subtotal,
+                         odoo_create_date=EXCLUDED.odoo_create_date, odoo_create_uid=EXCLUDED.odoo_create_uid,
+                         odoo_write_date=EXCLUDED.odoo_write_date, odoo_write_uid=EXCLUDED.odoo_write_uid,
+                         synced_at=now()"""
+                    total_lines += self._batch_exec(l_sql,
+                        "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())", l_vals)
+
+                batch_errors = 0
+                if len(invoices) < cs:
+                    break
+                time.sleep(0.3)
+
+            except Exception as e:
+                batch_errors += 1
+                if batch_errors >= 3:
+                    logger.error(f"  Credit inv batch failed 3x at last_id={last_id}: {e}")
+                    raise
+                wait = 30 * batch_errors
+                logger.warning(f"  Credit inv batch error at last_id={last_id} ({batch_errors}/3), retry in {wait}s: {e}")
+                time.sleep(wait)
+
+        return total_inv + total_lines, max_w
+
     # ---- Batch exec helper ----
 
     def _batch_exec(self, sql, template, values, page_size=1000):
