@@ -573,10 +573,10 @@ class SyncService:
             pp_fields = ['id','product_tmpl_id','barcode','active',
                          'attribute_value_ids','create_date','create_uid','write_date','write_uid']
             try:
-                variants = self._paginate(uid, pw, 'product.product', [('product_tmpl_id','in',tmpl_ids)], pp_fields, cs)
+                variants = self._paginate(uid, pw, 'product.product', [('product_tmpl_id','in',tmpl_ids)], pp_fields, cs, ctx=ctx_no_active)
             except Exception:
                 pp_fields.remove('attribute_value_ids')
-                variants = self._paginate(uid, pw, 'product.product', [('product_tmpl_id','in',tmpl_ids)], pp_fields, cs)
+                variants = self._paginate(uid, pw, 'product.product', [('product_tmpl_id','in',tmpl_ids)], pp_fields, cs, ctx=ctx_no_active)
 
             pp_vals = [
                 (r['id'], xid(r.get('product_tmpl_id')), xtxt(r.get('barcode')), xbool(r.get('active')),
