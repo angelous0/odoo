@@ -288,9 +288,10 @@ class SyncService:
                 'STOCK_LOCATIONS': self._sync_stock_locations,
                 'STOCK_QUANTS': self._sync_stock_quants,
                 'POS_ORDERS': self._sync_pos_orders,
+                'AR_CREDIT_INVOICES': self._sync_credit_invoices,
             }
             h = handlers[jc]
-            if jc in POS_JOBS:
+            if jc in POS_JOBS or jc in MULTI_JOBS:
                 rows, new_cursor = h(ck, mode, cursor, cs)
             else:
                 rows, new_cursor = h(mode, cursor, cs)
