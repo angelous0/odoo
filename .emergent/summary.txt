@@ -1,68 +1,59 @@
 <analysis>**original_problem_statement:**
-El usuario, un arquitecto de datos, solicitó la creación de un Operational Data Store (ODS) en PostgreSQL para replicar datos de una instancia de Odoo 10. El objetivo es crear un espejo de los datos de Odoo en un esquema llamado odoo para alimentar futuros sistemas de CRM, Finanzas y Producción.
+El usuario ha solicitado dos nuevos cambios en la funcionalidad del catálogo de productos:
 
-**PRODUCT REQUIREMENTS:**
+1.  **Excluir productos paneton:** En todas las vistas, consultas y endpoints que filtran el catálogo de productos, se debe agregar una nueva condición para excluir aquellos cuyo nombre () contenga la palabra paneton (insensible a mayúsculas/minúsculas).
+2.  **Ver productos archivados:** Implementar una opción (toggle en la UI) para incluir productos archivados () en los listados del catálogo.
+    *   **Backend:** Los endpoints relevantes deben aceptar un parámetro booleano . Por defecto (), debe filtrar por . Si es , no debe aplicar filtro por el campo .
+    *   **Frontend:** Las páginas que muestran productos deben tener un toggle Incluir archivados. Al activarlo, se debe volver a consultar al backend con el nuevo parámetro y marcar visualmente los productos archivados en la tabla (ej. con un badge Archivado).
 
-1.  **Fase 1 (Schema & Vistas):** Crear el schema  en PostgreSQL con tablas/vistas para maestros (partners, productos), atributos y órdenes de punto de venta (POS).
-2.  **Fase 2 (Sync Engine):** Implementar un motor de sincronización incremental desde Odoo 10 vía XML-RPC.
-3.  **Fase 3 (Stock Locations):** Sincronizar las ubicaciones de stock ().
-4.  **Fase 4 (UI y Vistas de Validación):** Crear una UI en React para visualizar los datos.
-5.  **Fase 5 (Stock Actual):** Agregar la sincronización del stock actual () y crear vistas/UI para analizar la disponibilidad.
-6.  **Requisito sobre la marcha:** Para el campo  en , se debe priorizar el valor del campo  del modelo relacionado. Si no existe, usar el campo  como fallback.
+Adicionalmente, en esta sesión se completó la solicitud de sincronizar el módulo de **Crédito** desde Odoo, creando las tablas  y  y toda la lógica de sincronización y visualización asociada.
 
 **User's preferred language**: Spanish. The next agent MUST respond in Spanish.
 
 **what currently exists?**
-Un sistema completo y funcional de sincronización de datos desde Odoo 10 a un ODS en PostgreSQL. El backend en FastAPI gestiona la conexión XML-RPC, la sincronización incremental/completa, y la lógica multi-empresa. Se han sincronizado con éxito más de 1 millón de registros de  y todos los datos maestros y de POS. El frontend en React ofrece un dashboard para ejecutar sincronizaciones, un historial detallado, y múltiples vistas para validar los datos (productos, POS, ubicaciones, stock). Se han implementado mejoras significativas de UX, como indicadores de progreso para tareas largas y un historial que se actualiza automáticamente. El sistema también limpia automáticamente los trabajos de sincronización huérfanos que quedan en estado RUNNING tras un reinicio del servidor.
+Un sistema de sincronización de datos desde Odoo 10 a un ODS en PostgreSQL, implementado con un backend en FastAPI y un frontend en React. El sistema sincroniza maestros (productos, partners), transacciones (POS, facturas de crédito) y datos de inventario (stock, ubicaciones). Se han implementado mejoras clave de resiliencia, como un mecanismo de reintentos con back-off exponencial que maneja errores  del servidor Odoo durante sincronizaciones prolongadas. El frontend permite monitorear el historial de sincronizaciones, ejecutar trabajos manualmente y visualizar los datos replicados en varias páginas (Dashboard, Historial, Productos, POS, Stock, y la nueva página de Facturas de Crédito). Los datos de productos (, , ) se mapean a valores resumen durante la sincronización.
 
 **Last working item**:
-- Last item agent was working: Investigando por qué la vista de POS Lines Full () no refleja los valores actualizados del campo  en los productos. El agente modificó con éxito la sincronización de  para que el campo  se pueble con el valor de  (en lugar de ), y verificó que los datos en la tabla  son correctos. Sin embargo, el usuario señaló que la vista de líneas de POS, que se une a esta tabla, sigue mostrando los valores antiguos.
-- Status: IN PROGRESS
+- Last item agent was working: El agente acababa de recibir el nuevo requerimiento para filtrar productos paneton y permitir la visualización de productos archivados. Estaba en la fase inicial de análisis, identificando los archivos del backend y frontend que necesitarían ser modificados para implementar esta nueva funcionalidad.
+- Status: NOT STARTED
 - Agent Testing Done: N
-- Which testing method agent to use? backend testing agent
+- Which testing method agent to use? both (El cambio afecta tanto a las consultas del backend como a la interfaz del frontend).
 - User Testing Done: N
 
 **All Pending/In progress Issue list**:
-  - Issue 1: (P0) La página POS Lines Full muestra datos incorrectos para el campo Tipo.
-
-  Issues Detail:
-  - Issue 1: 
-     - Attempted fixes: El agente modificó  para usar una función personalizada () que lee  de Odoo para el campo . Se ejecutó una resincronización completa de , y se confirmó que los datos en la tabla  están actualizados y son correctos.
-     - Next debug checklist: 
-        1. Revisar la definición de la vista  en  para asegurar que el  con  es correcto.
-        2. Ejecutar una consulta directa a la vista en la base de datos para ver qué valores está devolviendo: .
-        3. Comparar con los datos de la tabla base: .
-        4. Verificar el endpoint en  () para asegurarse de que no haya ninguna lógica de transformación adicional.
-        5. Una vez que la vista devuelva los datos correctos, verificar la página del frontend en .
-     - Why fix this issue and what will be achieved with the fix? Para asegurar la consistencia de los datos en toda la aplicación y que los reportes reflejen la información más precisa del producto, según lo solicitado por el usuario.
-     - Status:  IN PROGRESS
-     - Is recurring issue? N
-     - Should Test frontend/backend/both after fix? both
-     - Blocked on other issue: None
+- No hay issues pendientes. La tarea actual es una nueva solicitud de feature.
 
 **In progress Task List**:
-  - None.
+- Task 1: (P0) Implementar la nueva funcionalidad del catálogo de productos.
+
+ Task Detail:
+  - Task 1: 
+     - Where to resume: El agente debe comenzar por analizar los archivos identificados (, , y las páginas de frontend que muestran productos como  y ) para planificar la implementación de los dos cambios: el filtro  y el parámetro .
+     - What will be achieved with this? El catálogo de productos en el ODS reflejará las reglas de negocio del usuario (excluyendo paneton) y ofrecerá la flexibilidad de ver productos archivados para análisis históricos.
+     - Status:  NOT STARTED
+     - Should Test frontend/backend/both after fix? both
+     - Blocked on something: None
 
 **Upcoming and Future Tasks**
-- No hay tareas futuras definidas. El proyecto está funcionalmente completo según los requerimientos iniciales. El foco está en resolver el issue actual.
+- No hay tareas futuras definidas por el usuario.
 
 **Completed work in this session**
-- **Implementación de Sincronización de Stock:** Se completó toda la funcionalidad de , incluyendo la creación de la tabla , las vistas  y , el job de sincronización y las tres páginas de UI correspondientes.
-- **Optimización de Sync para Grandes Volúmenes:** Se refactorizó el  para procesar y escribir datos en lotes (), solucionando problemas de memoria y timeouts al sincronizar más de 1 millón de registros de stock.
-- **Corrección de Bugs Críticos:**
-    - Se solucionó un bug de orden en  donde las vistas se creaban antes que sus tablas base.
-    - Se corrigió un error de mapeo de campos ( vs ) que causaba que el stock se guardara como .
-- **Mejoras de Scheduler:** Se añadió soporte para ejecuciones  y se configuró el job  para que se ejecute cada hora.
-- **Mejoras de UI/UX:**
-    - Se implementó feedback visual claro (toasts, barras de progreso, botones deshabilitados) para las sincronizaciones largas.
-    - Se añadió un estado EN PROCESO () en la página de Historial, con auto-refresco cada 5 segundos mientras haya tareas activas.
-- **Mantenimiento y Estabilidad:**
-    - Se implementó una rutina de limpieza al arranque del servidor para marcar como  los jobs que quedaron pegados en estado  por un reinicio.
-- **Validación Completa:** Se ejecutó  después de la implementación de la funcionalidad de stock, con un resultado de 100% de tests pasados.
-- **Lógica de  en Productos:** Se actualizó el sync de productos para usar  en lugar de , como solicitó el usuario.
+- **Sincronización de Facturas de Crédito:**
+    - Se crearon las tablas  y  ().
+    - Se añadió el job  a  ().
+    - Se implementó la lógica de sincronización completa en .
+    - Se creó un endpoint  en  con joins a .
+    - Se desarrolló una nueva página en el frontend () para mostrar los datos con filtros.
+- **Resolución de Errores de Sincronización POS:**
+    - Se diagnosticó que los errores  del servidor Odoo interrumpían las sincronizaciones largas.
+    - Se implementó una lógica robusta de reintentos con pausas en , permitiendo que el proceso se recupere automáticamente y complete la sincronización de más de 1.3 millones de líneas de POS.
+    - Se verificó la sincronización exitosa de la orden , que antes faltaba.
+- **Corrección de Mapeo de Datos de Productos:**
+    - Se solucionó un bug en el mapeo del campo  que no leía  correctamente, implementando un mapeo por nombre.
+    - Se aplicó una lógica similar para los campos  (con ) y  (con ), asegurando la consistencia de los datos en .
 
 **Earlier issues found/mentioned but not fixed**
-   - None
+   - None.
 
 **Known issue recurrence from previous fork**
   - N/A
@@ -72,73 +63,71 @@ Un sistema completo y funcional de sincronización de datos desde Odoo 10 a un O
 
 **Key Technical Concepts**
 - **Backend:** FastAPI, PostgreSQL (), XML-RPC.
-- **Frontend:** React, TailwindCSS,  para toasts.
-- **Arquitectura:** ODS (Operational Data Store) con sincronización incremental/completa.
-- **Base de Datos:** Migración idempotente en el arranque. Vistas SQL para datos agregados. Advisory locks para prevenir concurrencia en syncs.
+- **Frontend:** React, TailwindCSS, .
+- **Arquitectura:** ODS con sincronización incremental resiliente.
+- **Base de Datos:** Migración idempotente, vistas SQL.
+- **Sincronización:** Lógica de reintentos con back-off para manejar inestabilidad del servidor de origen (Odoo).
 
 **key DB schema**
 - : {job_code PK, schedule_type, run_time, mode, chunk_size}
 - : {id PK, status, started_at, finished_at}
-- : {(company_key, odoo_id) PK}
-- : {(company_key, odoo_id) PK, tipo}
-- : {(company_key, odoo_id) PK}
+- : {(company_key, odoo_id) PK, tipo, entalle, tela, active}
 - : {(company_key, odoo_id) PK}
 - : {(company_key, odoo_id) PK}
+- : {(company_key, odoo_id) PK, partner_id, date_invoice, state}
+- : {(company_key, odoo_id) PK, invoice_id, product_id}
 
 **changes in tech stack**
-- None in this session.
+- None.
 
 **All files of reference**
-- : Modificado para la lógica de  y para la nueva lógica del campo .
-- : Modificado para las nuevas tablas/vistas de stock, la lógica  y la limpieza de jobs huérfanos.
-- : Modificado para los nuevos endpoints de stock y la llamada a la limpieza de jobs.
-- : Modificado para mejorar el feedback de los botones de sync.
-- : Modificado para mostrar el estado  con auto-refresco.
-- : Añadidas las rutas para las páginas de stock.
+- : Modificado extensamente para la lógica de reintentos 502, mapeo de // y para el nuevo job de .
+- : Modificado para agregar las tablas y el job de .
+- : Modificado para agregar el endpoint .
+- : Nuevo archivo para la UI de facturas de crédito.
+- : Modificado para agregar la ruta y el link de navegación a la nueva página.
+- : Modificado para agregar el botón de sync de créditos.
 
 **Areas that need refactoring**:
 - None.
 
 **key api endpoints**
 - : Ejecuta trabajos de sincronización.
-- : Obtiene el estado de los jobs.
-- : Proporciona un resumen del estado de los datos.
-- : Obtiene las líneas de POS enriquecidas (origen del issue actual).
-- : Obtiene las ubicaciones.
-- : Obtiene los registros de .
+- : Obtiene las líneas de POS enriquecidas.
 - : Obtiene el stock agregado por producto.
 - : Obtiene el stock agregado por producto y ubicación.
+- : **(Nuevo)** Obtiene las facturas de crédito.
 - : Ejecuta las migraciones de la base de datos.
 
 **Critical Info for New Agent**
-- El issue actual está en la vista . La tabla  tiene los datos correctos para , pero la vista no los está reflejando. La investigación debe centrarse en la definición SQL de la vista en .
-- El scheduler () ahora soporta . El job  está configurado para usarlo.
-- El servidor () ahora ejecuta una función  al inicio para evitar que los jobs se queden pegados en estado .
+- La nueva tarea requiere modificar múltiples capas de la aplicación.
+- **Para el filtro paneton:** Se debe identificar todas las vistas y endpoints que consultan el catálogo (, , etc.) y añadir la condición  en .
+- **Para los productos archivados:**
+    - En el backend (), los endpoints afectados deben ser modificados para aceptar un parámetro de query .
+    - La lógica de la consulta SQL (en  o ) debe cambiar para aplicar  solo si  es .
+    - En el frontend, se debe agregar un componente de  o  en las páginas relevantes. El estado de este componente debe controlar el parámetro  en las llamadas a la API y refrescar los datos.
 
 **documents and test reports created in this job**
-  - 
-  - 
+  -  (actualizado)
+  -  (pruebas de  pasadas)
 
 **Last 10 User Messages and any pending HUMAN messages** 
-- **User:** Preguntó si la sincronización incremental funcionaba.
-- **Agent:** Confirmó que sí, ejecutando una prueba que solo procesó 4 registros nuevos.
-- **User:** Preguntó qué hacían los diferentes botones de sincronización.
-- **Agent:** Explicó la función de Sync Todo, Sync Global y los botones de POS por empresa.
-- **User:** Reportó que al presionar Sync Todo no pasaba nada.
-- **Agent:** Investigó y descubrió que era un problema de feedback de UI (la tarea se ejecutaba pero tardaba mucho). Mejoró la UI con toasts, barras de progreso y botones deshabilitados.
-- **User:** Sugirió mostrar los trabajos en progreso en la página de Historial.
-- **Agent:** Implementó un estado EN PROCESO con un badge animado y auto-refresco en la tabla de historial.
-- **User:** Solicitó que  se actualice cada hora.
-- **Agent:** Modificó el scheduler para soportar la frecuencia  y aplicó el cambio.
-- **User:** Reportó que un job se quedó pegado en EN PROCESO y la tabla se refrescaba sin parar.
-- **Agent:** Implementó una limpieza automática de jobs huérfanos al arrancar el servidor para solucionar el problema.
-- **User:** Solicitó que el campo  de los productos use  en lugar de .
-- **Agent:** Implementó el cambio y resincronizó los productos.
-- **User:** Informó que el cambio no se reflejaba en el reporte de POS Lines.
-- **Agent:** Acusó recibo y comenzó a investigar. Este es el estado actual.
+- **User:** Preguntó si los datos , ,  actualizados ya estaban disponibles para otros módulos.
+- **Agent:** Confirmó que sí, ya que los datos se transforman y persisten en la tabla base .
+- **User:** Preguntó por la existencia de la orden  con id .
+- **Agent:** Investigó y descubrió que no estaba en la BD local. Inició un sync para traerla.
+- **User:** Preguntó si el sync había terminado.
+- **Agent:** Descubrió que el sync fallaba por errores 502 del servidor Odoo y reinicios.
+- **Agent:** Implementó una lógica de reintentos para manejar los errores 502 y relanzó el sync.
+- **Agent:** Confirmó que la lógica de reintentos funcionó, el sync se completó y la orden  fue encontrada.
+- **User:** Confirmó que todo estaba listo.
+- **Agent:** Resumió el trabajo completado.
+- **User:** Envió un nuevo requerimiento completo para sincronizar el módulo de **CRÉDITO**.
+- **Agent:** Implementó exitosamente toda la funcionalidad de sincronización y visualización de facturas de crédito.
+- **User:** Envió un nuevo requerimiento para **excluir paneton** y **ver productos archivados**.
 
 **Project Health Check:**
-- **Broken**: La vista de datos  y la página correspondiente POS Lines Full están mostrando datos desactualizados para el campo Tipo, lo que constituye una regresión.
+- **Broken**: Nada está roto. El sistema está estable y las funcionalidades previas, completas.
 - **Mocked**: No hay datos mockeados.
 
 **3rd Party Integrations**
@@ -148,10 +137,10 @@ Un sistema completo y funcional de sincronización de datos desde Odoo 10 a un O
   - Testing agent used after significant changes: YES
   - Troubleshoot agent used after agent stuck in loop: NO
   - Test files created: []
-  - Known regressions: Sí, el campo  en el reporte  está mostrando datos antiguos después del último cambio.
+  - Known regressions: None.
 
 **Credentials to test flow:**
-Las credenciales de Odoo están en las variables de entorno de . No es necesario solicitarlas.
+Las credenciales de Odoo se encuentran en las variables de entorno del backend y no necesitan ser solicitadas.
 
 **What agent forgot to execute**
-El agente no ha olvidado nada. Está a mitad de la depuración de un bug introducido por la última modificación solicitada por el usuario. El siguiente paso es analizar la definición de la vista SQL.</analysis>
+Nada. El agente recibió una nueva tarea al final de la sesión y estaba preparándose para comenzar su implementación.</analysis>
