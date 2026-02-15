@@ -248,13 +248,14 @@ class SyncService:
                 em = mode or jm
                 is_m = jc in MASTER_JOBS
                 is_p = jc in POS_JOBS
+                is_multi = jc in MULTI_JOBS
                 if target == 'GLOBAL_ONLY' and not is_m:
                     continue
                 if target == 'POS_ONLY' and not is_p:
                     continue
                 if is_m:
                     results.append(self._run_job(jc, 'GLOBAL', em, cs))
-                elif is_p:
+                elif is_p or is_multi:
                     if company_key:
                         results.append(self._run_job(jc, company_key, em, cs))
                     else:
