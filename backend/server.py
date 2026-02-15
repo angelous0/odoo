@@ -762,6 +762,98 @@ async def get_health():
         return {"tables": [], "pos_by_company": [], "orphan_lines": -1, "recent_errors": [], "error": str(e)}
 
 
+@api_router.get("/credit-invoices")
+async def get_credit_invoices(
+    company_key: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    state: Optional[str] = None,
+    partner_id: Optional[int] = None,
+    page: int = 1,
+    page_size: int = 50,
+):
+    """Query credit invoices with filters and pagination."""
+    try:
+        with get_pg_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                conditions = []
+                params = []
+                if company_key:
+                    conditions.append("i.company_key = %s"); params.append(company_key)
+                if date_from:
+                    conditions.append("i.date_invoice >= %s"); params.append(date_from)
+                if date_to:
+                    conditions.append("i.date_invoice <= %s"); params.append(date_to)
+                if state:
+                    conditions.append("i.state = %s"); params.append(state)
+                if partner_id:
+                    conditions.append("i.partner_id = %s"); params.append(partner_id)
+                where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+                cur.execute(f"SELECT count(*) as total FROM odoo.account_invoice_credit i {where}", params)
+                total = cur.fetchone()["total"]
+                offset = (page - 1) * page_size
+                cur.execute(f"""
+                    SELECT i.company_key, i.odoo_id, i.number, i.date_invoice,
+                           i.partner_id, p.name as partner_name,
+                           i.state, i.amount_total, i.amount_residual,
+                           i.odoo_create_date, i.odoo_write_date
+                    FROM odoo.account_invoice_credit i
+                    LEFT JOIN odoo.res_partner p ON p.company_key=i.company_key AND p.odoo_id=i.partner_id
+                    {where}
+                    ORDER BY i.date_invoice DESC, i.odoo_id DESC
+                    LIMIT %s OFFSET %s
+                """, params + [page_size, offset])
+                rows = cur.fetchall()
+                for r in rows:
+                    for k in ('amount_total', 'amount_residual'):
+                        if r[k] is not None: r[k] = float(r[k])
+                    for k in ('date_invoice', 'odoo_create_date', 'odoo_write_date'):
+                        if r[k] is not None: r[k] = str(r[k])
+        return {"rows": rows, "total": total, "page": page, "page_size": page_size,
+                "total_pages": (total + page_size - 1) // page_size if total > 0 else 0}
+    except Exception as e:
+        return {"rows": [], "total": 0, "page": 1, "page_size": page_size, "total_pages": 0, "error": str(e)}
+
+
+@api_router.get("/credit-invoice-lines")
+async def get_credit_invoice_lines(
+    invoice_id: int = 0,
+    company_key: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 50,
+):
+    """Query credit invoice lines."""
+    try:
+        with get_pg_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                conditions = []
+                params = []
+                if invoice_id:
+                    conditions.append("l.invoice_id = %s"); params.append(invoice_id)
+                if company_key:
+                    conditions.append("l.company_key = %s"); params.append(company_key)
+                where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+                cur.execute(f"SELECT count(*) as total FROM odoo.account_invoice_credit_line l {where}", params)
+                total = cur.fetchone()["total"]
+                offset = (page - 1) * page_size
+                cur.execute(f"""
+                    SELECT l.company_key, l.odoo_id, l.invoice_id, l.product_id, l.name,
+                           l.quantity, l.price_unit, l.discount, l.price_subtotal
+                    FROM odoo.account_invoice_credit_line l
+                    {where}
+                    ORDER BY l.invoice_id DESC, l.odoo_id ASC
+                    LIMIT %s OFFSET %s
+                """, params + [page_size, offset])
+                rows = cur.fetchall()
+                for r in rows:
+                    for k in ('quantity', 'price_unit', 'discount', 'price_subtotal'):
+                        if r[k] is not None: r[k] = float(r[k])
+        return {"rows": rows, "total": total, "page": page, "page_size": page_size,
+                "total_pages": (total + page_size - 1) // page_size if total > 0 else 0}
+    except Exception as e:
+        return {"rows": [], "total": 0, "page": 1, "page_size": page_size, "total_pages": 0, "error": str(e)}
+
+
 app.include_router(api_router)
 
 app.add_middleware(
