@@ -798,7 +798,7 @@ async def get_credit_invoices(
                            i.state, i.amount_total, i.amount_residual,
                            i.odoo_create_date, i.odoo_write_date
                     FROM odoo.account_invoice_credit i
-                    LEFT JOIN odoo.res_partner p ON p.company_key=i.company_key AND p.odoo_id=i.partner_id
+                    LEFT JOIN odoo.res_partner p ON p.company_key='GLOBAL' AND p.odoo_id=i.partner_id
                     {where}
                     ORDER BY i.date_invoice DESC, i.odoo_id DESC
                     LIMIT %s OFFSET %s
