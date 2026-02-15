@@ -11,6 +11,7 @@ import HealthPage from "@/pages/HealthPage";
 import StockQuantsPage from "@/pages/StockQuantsPage";
 import StockByProductPage from "@/pages/StockByProductPage";
 import StockByLocationPage from "@/pages/StockByLocationPage";
+import CreditInvoicesPage from "@/pages/CreditInvoicesPage";
 import { Database } from "lucide-react";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
