@@ -25,8 +25,9 @@ Sistema de sincronización de datos desde Odoo 10 a un ODS en PostgreSQL, con ba
 - **Facturas de Crédito:** Sincronización completa con líneas
 
 ### Filtros de Catálogo (Feb 2026)
-- **Exclusión "paneton":** Filtro `NOT ILIKE '%paneton%'` en vistas SQL `v_stock_by_product_location` y `v_stock_by_product`
+- **Exclusión "paneton" y "publicitario":** Filtro `NOT ILIKE` en vistas SQL `v_stock_by_product_location` y `v_stock_by_product`
 - **Toggle archivados:** Parámetro `include_archived` en endpoints `/api/stock-by-product` y `/api/stock-by-location`. Frontend con botón toggle y badges "Archivado"/"Activo"
+- **Sync incluye archivados:** `_sync_products` trae productos con `active=False` desde Odoo usando `active_test: False`
 
 ## Endpoints API
 - `POST /api/migrate` - Migración idempotente
