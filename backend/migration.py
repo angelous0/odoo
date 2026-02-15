@@ -624,6 +624,8 @@ ODOO_TABLES = [
     "product_attribute_value_product_product_rel",
     "pos_order",
     "pos_order_line",
+    "account_invoice_credit",
+    "account_invoice_credit_line",
 ]
 
 ODOO_VIEWS = [
