@@ -240,6 +240,21 @@ export default function Dashboard({ connection, migrationStatus, onMigrate, onRe
               data-testid="sync-pos-proyectomoda-btn">
               <Store className="h-4 w-4 mr-2" />{syncing === 'POS ProyectoModa' ? 'Sincronizando...' : 'POS ProyectoModa'}
             </Button>
+            <Button size="sm" variant="outline" onClick={() => {
+              setSyncing('Créditos');
+              const toastId = toast.loading('Sincronizando créditos...', { duration: Infinity });
+              axios.post(`${api}/sync/run`, { job_code: 'AR_CREDIT_INVOICES', mode: 'FULL' }, { timeout: 600000 })
+                .then(res => {
+                  const d = res.data;
+                  const totalRows = d.results?.reduce((a, r) => a + (r.rows || 0), 0) || 0;
+                  toast.success(`Créditos: ${totalRows.toLocaleString()} filas`, { id: toastId });
+                })
+                .catch(e => toast.error(`Error: ${e.message}`, { id: toastId }))
+                .finally(() => setSyncing(null));
+            }} disabled={!!syncing}
+              data-testid="sync-credit-btn">
+              <Zap className="h-4 w-4 mr-2" />{syncing === 'Créditos' ? 'Sincronizando...' : 'Créditos'}
+            </Button>
           </div>
           {syncing && (
             <div className="mt-3 flex items-center gap-2 text-sm bg-primary/10 border border-primary/20 rounded-md px-4 py-2">
