@@ -181,6 +181,19 @@ function App() {
                   >
                     Health
                   </NavLink>
+                  <NavLink
+                    to="/credit-invoices"
+                    className={({ isActive }) =>
+                      `px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                        isActive
+                          ? "bg-secondary text-foreground"
+                          : "text-muted-foreground hover:text-foreground hover:bg-secondary/50"
+                      }`
+                    }
+                    data-testid="nav-credit"
+                  >
+                    Créditos
+                  </NavLink>
                 </div>
               </div>
               <div className="flex items-center gap-3" data-testid="connection-status">
@@ -227,6 +240,7 @@ function App() {
             <Route path="/stock-quants" element={<StockQuantsPage api={API} />} />
             <Route path="/stock-by-product" element={<StockByProductPage api={API} />} />
             <Route path="/stock-by-location" element={<StockByLocationPage api={API} />} />
+            <Route path="/credit-invoices" element={<CreditInvoicesPage />} />
             <Route path="/health" element={<HealthPage api={API} />} />
           </Routes>
         </main>
