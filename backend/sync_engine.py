@@ -462,7 +462,7 @@ class SyncService:
         domain = self._inc_domain([], cursor, mode)
         fields = ['id','name','display_name','parent_id','commercial_partner_id',
                    'x_cliente_principal','x_es_principal','mayorista','x_no_llamar','x_ultima_venta',
-                   'vat','phone','mobile','street','city','active',
+                   'vat','phone','mobile','street','city','state_id','active',
                    'create_date','create_uid','write_date','write_uid']
         recs = self._paginate(uid, pw, 'res.partner', domain, fields, cs)
         vals = [
@@ -472,14 +472,16 @@ class SyncService:
              xbool_nullable(r.get('mayorista')), xbool_nullable(r.get('x_no_llamar')),
              xdt(r.get('x_ultima_venta')),
              xtxt(r.get('vat')), xtxt(r.get('phone')), xtxt(r.get('mobile')),
-             xtxt(r.get('street')), xtxt(r.get('city')), xbool(r.get('active')),
+             xtxt(r.get('street')), xtxt(r.get('city')),
+             xm2o_name(r.get('state_id')),
+             xbool(r.get('active')),
              xdt(r.get('write_date')), xdt(r.get('create_date')),
              xid(r.get('create_uid')), xid(r.get('write_uid')))
             for r in recs
         ]
         sql = """INSERT INTO odoo.res_partner (company_key,odoo_id,name,display_name,parent_id,commercial_partner_id,
                  x_cliente_principal,x_es_principal,mayorista,x_no_llamar,x_ultima_venta,
-                 vat,phone,mobile,street,city,active,
+                 vat,phone,mobile,street,city,state_name,active,
                  odoo_write_date,odoo_create_date,odoo_create_uid,odoo_write_uid,synced_at)
                  VALUES %s ON CONFLICT (company_key,odoo_id) DO UPDATE SET
                  name=EXCLUDED.name,display_name=EXCLUDED.display_name,parent_id=EXCLUDED.parent_id,
@@ -488,11 +490,11 @@ class SyncService:
                  mayorista=EXCLUDED.mayorista,x_no_llamar=EXCLUDED.x_no_llamar,
                  x_ultima_venta=EXCLUDED.x_ultima_venta,
                  vat=EXCLUDED.vat,phone=EXCLUDED.phone,mobile=EXCLUDED.mobile,
-                 street=EXCLUDED.street,city=EXCLUDED.city,active=EXCLUDED.active,
+                 street=EXCLUDED.street,city=EXCLUDED.city,state_name=EXCLUDED.state_name,active=EXCLUDED.active,
                  odoo_write_date=EXCLUDED.odoo_write_date,odoo_create_date=EXCLUDED.odoo_create_date,
                  odoo_create_uid=EXCLUDED.odoo_create_uid,odoo_write_uid=EXCLUDED.odoo_write_uid,
                  synced_at=now()"""
-        template = "('GLOBAL',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())"
+        template = "('GLOBAL',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())"
         n = self._batch_exec(sql, template, vals)
         return n, self._max_wd(recs, cursor)
 

@@ -403,6 +403,9 @@ ALTER TABLE odoo.res_partner
   ADD COLUMN IF NOT EXISTS odoo_create_uid INT,
   ADD COLUMN IF NOT EXISTS odoo_write_uid INT;
 
+ALTER TABLE odoo.res_partner
+  ADD COLUMN IF NOT EXISTS state_name TEXT;
+
 -- product_template
 ALTER TABLE odoo.product_template
   ADD COLUMN IF NOT EXISTS odoo_create_date TIMESTAMPTZ,
