@@ -863,6 +863,149 @@ async def get_credit_invoice_lines(
         return {"rows": [], "total": 0, "page": 1, "page_size": page_size, "total_pages": 0, "error": str(e)}
 
 
+# ----------------------------------------------------------------
+# ODOO-SYNC CONTROL ENDPOINTS
+# ----------------------------------------------------------------
+
+# Track background sync tasks
+_running_syncs = {}
+
+
+class OdooSyncRunRequest(BaseModel):
+    job_code: str
+    mode: Optional[str] = None
+
+
+class OdooSyncBatchRequest(BaseModel):
+    job_codes: List[str]
+    stop_on_error: bool = True
+
+
+@api_router.get("/odoo-sync/job-status")
+async def get_job_status(job_code: Optional[str] = None):
+    """Get sync job status with last run info. If no job_code, return all jobs."""
+    try:
+        with get_pg_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                if job_code:
+                    cur.execute("""
+                        SELECT job_code, enabled, schedule_type, run_time::text as run_time,
+                               mode, chunk_size, company_scope,
+                               last_run_at, last_success_at, last_error, last_cursor
+                        FROM odoo.sync_job WHERE job_code = %s
+                    """, (job_code,))
+                    job = cur.fetchone()
+                    if not job:
+                        return {"error": f"Job {job_code} not found"}
+                    for k in ('last_run_at', 'last_success_at', 'last_cursor'):
+                        if job[k] is not None:
+                            job[k] = job[k].isoformat()
+                    cur.execute("""
+                        SELECT id, started_at, ended_at, status, rows_upserted, rows_updated, error_message, company_key
+                        FROM odoo.sync_run_log WHERE job_code = %s
+                        ORDER BY started_at DESC LIMIT 1
+                    """, (job_code,))
+                    last_run = cur.fetchone()
+                    if last_run:
+                        for k in ('started_at', 'ended_at'):
+                            if last_run[k] is not None:
+                                last_run[k] = last_run[k].isoformat()
+                    return {"job": job, "last_run": last_run}
+                else:
+                    cur.execute("""
+                        SELECT job_code, enabled, schedule_type, run_time::text as run_time,
+                               mode, chunk_size, company_scope,
+                               last_run_at, last_success_at, last_error, last_cursor
+                        FROM odoo.sync_job ORDER BY priority
+                    """)
+                    jobs = cur.fetchall()
+                    for job in jobs:
+                        for k in ('last_run_at', 'last_success_at', 'last_cursor'):
+                            if job[k] is not None:
+                                job[k] = job[k].isoformat()
+                    # Get last run for each job
+                    cur.execute("""
+                        SELECT DISTINCT ON (job_code) job_code, id, started_at, ended_at,
+                               status, rows_upserted, rows_updated, error_message, company_key
+                        FROM odoo.sync_run_log
+                        ORDER BY job_code, started_at DESC
+                    """)
+                    last_runs_raw = cur.fetchall()
+                    last_runs = {}
+                    for lr in last_runs_raw:
+                        for k in ('started_at', 'ended_at'):
+                            if lr[k] is not None:
+                                lr[k] = lr[k].isoformat()
+                        last_runs[lr['job_code']] = lr
+                    # Check if any job is currently RUNNING
+                    cur.execute("""
+                        SELECT job_code FROM odoo.sync_run_log WHERE status = 'RUNNING'
+                    """)
+                    running_jobs = [r['job_code'] for r in cur.fetchall()]
+                    return {"jobs": jobs, "last_runs": last_runs, "running_jobs": running_jobs}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@api_router.post("/odoo-sync/run")
+async def odoo_sync_run(request: OdooSyncRunRequest):
+    """Run a single sync job in background. Returns immediately."""
+    jc = request.job_code
+    if jc in _running_syncs and not _running_syncs[jc].done():
+        return {"success": False, "message": f"Job {jc} ya está en ejecución."}
+
+    async def _run():
+        from sync_engine import SyncService
+        try:
+            svc = SyncService()
+            await asyncio.to_thread(
+                svc.run_sync,
+                job_code=jc,
+                mode=request.mode,
+                target='ALL',
+            )
+        except Exception as e:
+            logger.error(f"Background sync {jc} error: {e}")
+        finally:
+            _running_syncs.pop(jc, None)
+
+    task = asyncio.create_task(_run())
+    _running_syncs[jc] = task
+    return {"success": True, "message": f"Job {jc} iniciado en background."}
+
+
+@api_router.post("/odoo-sync/run-batch")
+async def odoo_sync_run_batch(request: OdooSyncBatchRequest):
+    """Run multiple sync jobs sequentially in background."""
+    batch_key = "|".join(request.job_codes)
+    if batch_key in _running_syncs and not _running_syncs[batch_key].done():
+        return {"success": False, "message": "Este batch ya está en ejecución."}
+
+    async def _run_batch():
+        from sync_engine import SyncService
+        try:
+            svc = SyncService()
+            for jc in request.job_codes:
+                try:
+                    logger.info(f"Batch: starting {jc}")
+                    await asyncio.to_thread(
+                        svc.run_sync,
+                        job_code=jc,
+                        mode=None,
+                        target='ALL',
+                    )
+                except Exception as e:
+                    logger.error(f"Batch sync {jc} error: {e}")
+                    if request.stop_on_error:
+                        break
+        finally:
+            _running_syncs.pop(batch_key, None)
+
+    task = asyncio.create_task(_run_batch())
+    _running_syncs[batch_key] = task
+    return {"success": True, "message": f"Batch de {len(request.job_codes)} jobs iniciado.", "job_codes": request.job_codes}
+
+
 app.include_router(api_router)
 
 app.add_middleware(
