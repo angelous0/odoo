@@ -8,7 +8,7 @@ import asyncio
 from pathlib import Path
 from datetime import datetime, timezone
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from contextlib import contextmanager
