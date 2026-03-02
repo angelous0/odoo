@@ -12,6 +12,7 @@ import StockQuantsPage from "@/pages/StockQuantsPage";
 import StockByProductPage from "@/pages/StockByProductPage";
 import StockByLocationPage from "@/pages/StockByLocationPage";
 import CreditInvoicesPage from "@/pages/CreditInvoicesPage";
+import SyncControlPage from "@/pages/SyncControlPage";
 import { Database } from "lucide-react";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
@@ -194,6 +195,19 @@ function App() {
                   >
                     Créditos
                   </NavLink>
+                  <NavLink
+                    to="/sync-control"
+                    className={({ isActive }) =>
+                      `px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                        isActive
+                          ? "bg-secondary text-foreground"
+                          : "text-muted-foreground hover:text-foreground hover:bg-secondary/50"
+                      }`
+                    }
+                    data-testid="nav-sync-control"
+                  >
+                    Sync Control
+                  </NavLink>
                 </div>
               </div>
               <div className="flex items-center gap-3" data-testid="connection-status">
@@ -241,6 +255,7 @@ function App() {
             <Route path="/stock-by-product" element={<StockByProductPage api={API} />} />
             <Route path="/stock-by-location" element={<StockByLocationPage api={API} />} />
             <Route path="/credit-invoices" element={<CreditInvoicesPage />} />
+            <Route path="/sync-control" element={<SyncControlPage />} />
             <Route path="/health" element={<HealthPage api={API} />} />
           </Routes>
         </main>
