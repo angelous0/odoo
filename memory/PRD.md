@@ -45,5 +45,9 @@ Sistema de sincronización de datos desde Odoo 10 a un ODS en PostgreSQL, con ba
 - `odoo.v_stock_by_product` - Vista agregada (excluye paneton, incluye active)
 - `odoo.v_stock_by_product_location` - Vista por ubicación (excluye paneton, incluye active)
 
-## Backlog
+### Sync Control (Mar 2026)
+- **Página Sync Control**: Monitor de jobs con tabla, badges de estado (OK/ERROR/RUNNING), botón "Run" por fila
+- **Botones macro**: Clientes (RES_PARTNER), Ventas (POS_ORDERS), Productos (PRODUCTS+ATTRIBUTES), Stock (STOCK_QUANTS), Créditos (AR_CREDIT_INVOICES)
+- **Endpoints**: `GET /api/odoo-sync/job-status`, `POST /api/odoo-sync/run`, `POST /api/odoo-sync/run-batch`
+- **Background execution**: Jobs se ejecutan sin bloquear, con polling y toast notifications
 - No hay tareas pendientes definidas por el usuario.
