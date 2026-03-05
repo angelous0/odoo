@@ -424,6 +424,9 @@ ALTER TABLE odoo.pos_order
   ADD COLUMN IF NOT EXISTS odoo_create_uid INT,
   ADD COLUMN IF NOT EXISTS odoo_write_uid INT;
 
+ALTER TABLE odoo.pos_order
+  ADD COLUMN IF NOT EXISTS location_id INT;
+
 -- res_company (audit)
 ALTER TABLE odoo.res_company
   ADD COLUMN IF NOT EXISTS odoo_create_date TIMESTAMPTZ,
