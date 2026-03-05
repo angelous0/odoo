@@ -441,22 +441,33 @@ class SyncService:
         return total_rows, max_w
 
     def _sync_res_users(self, mode, cursor, cs):
-        uid, pw = self._auth('Ambission')
-        domain = self._inc_domain([], cursor, mode)
-        recs = self._paginate(uid, pw, 'res.users', domain,
-                              ['id','login','name','active','create_date','create_uid','write_date','write_uid'], cs,
-                              ctx={'active_test': False})
-        vals = [(r['id'], xtxt(r.get('login')), xtxt(r.get('name')), xbool(r.get('active')),
-                 xdt(r.get('write_date')), xdt(r.get('create_date')),
-                 xid(r.get('create_uid')), xid(r.get('write_uid'))) for r in recs]
-        sql = """INSERT INTO odoo.res_users (company_key,odoo_id,login,name,active,odoo_write_date,odoo_create_date,odoo_create_uid,odoo_write_uid,synced_at)
-                 VALUES %s ON CONFLICT (company_key,odoo_id) DO UPDATE SET
-                 login=EXCLUDED.login,name=EXCLUDED.name,active=EXCLUDED.active,
-                 odoo_write_date=EXCLUDED.odoo_write_date,odoo_create_date=EXCLUDED.odoo_create_date,
-                 odoo_create_uid=EXCLUDED.odoo_create_uid,odoo_write_uid=EXCLUDED.odoo_write_uid,synced_at=now()"""
-        template = "('GLOBAL',%s,%s,%s,%s,%s,%s,%s,%s,now())"
-        n = self._batch_exec(sql, template, vals)
-        return n, self._max_wd(recs, cursor)
+        """Sync res.users from all companies (Ambission + ProyectoModa)."""
+        total = 0
+        max_w = cursor
+        for ck in ('Ambission', 'ProyectoModa'):
+            try:
+                uid, pw = self._auth(ck)
+            except Exception as e:
+                logger.warning(f"res.users skip {ck}: {e}")
+                continue
+            domain = self._inc_domain([], cursor, mode)
+            recs = self._paginate(uid, pw, 'res.users', domain,
+                                  ['id','login','name','active','create_date','create_uid','write_date','write_uid'], cs,
+                                  ctx={'active_test': False})
+            vals = [(r['id'], xtxt(r.get('login')), xtxt(r.get('name')), xbool(r.get('active')),
+                     xdt(r.get('write_date')), xdt(r.get('create_date')),
+                     xid(r.get('create_uid')), xid(r.get('write_uid'))) for r in recs]
+            sql = """INSERT INTO odoo.res_users (company_key,odoo_id,login,name,active,odoo_write_date,odoo_create_date,odoo_create_uid,odoo_write_uid,synced_at)
+                     VALUES %s ON CONFLICT (company_key,odoo_id) DO UPDATE SET
+                     login=EXCLUDED.login,name=EXCLUDED.name,active=EXCLUDED.active,
+                     odoo_write_date=EXCLUDED.odoo_write_date,odoo_create_date=EXCLUDED.odoo_create_date,
+                     odoo_create_uid=EXCLUDED.odoo_create_uid,odoo_write_uid=EXCLUDED.odoo_write_uid,synced_at=now()"""
+            template = "('GLOBAL',%s,%s,%s,%s,%s,%s,%s,%s,now())"
+            n = self._batch_exec(sql, template, vals)
+            total += n
+            max_w = self._max_wd(recs, max_w)
+            logger.info(f"  res.users from {ck}: {n} rows")
+        return total, max_w
 
     def _sync_res_partner(self, mode, cursor, cs):
         uid, pw = self._auth('Ambission')
