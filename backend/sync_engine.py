@@ -444,7 +444,8 @@ class SyncService:
         uid, pw = self._auth('Ambission')
         domain = self._inc_domain([], cursor, mode)
         recs = self._paginate(uid, pw, 'res.users', domain,
-                              ['id','login','name','active','create_date','create_uid','write_date','write_uid'], cs)
+                              ['id','login','name','active','create_date','create_uid','write_date','write_uid'], cs,
+                              ctx={'active_test': False})
         vals = [(r['id'], xtxt(r.get('login')), xtxt(r.get('name')), xbool(r.get('active')),
                  xdt(r.get('write_date')), xdt(r.get('create_date')),
                  xid(r.get('create_uid')), xid(r.get('write_uid'))) for r in recs]
