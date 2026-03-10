@@ -1,4 +1,5 @@
-from fastapi import FastAPI, APIRouter
+from fastapi import FastAPI, APIRouter, Header
+from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -869,6 +870,57 @@ async def get_credit_invoice_lines(
 
 # Track background sync tasks
 _running_syncs = {}
+
+VALID_COMPANY_KEYS = {'Ambission', 'ProyectoModa'}
+
+
+class SyncPosRequest(BaseModel):
+    company_key: str
+    desde: Optional[str] = None
+    hasta: Optional[str] = None
+    full: Optional[bool] = False
+
+
+@api_router.post("/sync/pos")
+async def sync_pos(request: SyncPosRequest, x_internal_token: Optional[str] = Header(None)):
+    """Targeted POS sync with metrics. Protected by X-Internal-Token."""
+    expected = os.environ.get('ODOO_SYNC_TOKEN')
+    if expected and x_internal_token != expected:
+        return JSONResponse(status_code=401, content={"ok": False, "error": "Token inválido o ausente."})
+
+    if request.company_key not in VALID_COMPANY_KEYS:
+        return JSONResponse(status_code=400, content={"ok": False, "error": f"company_key inválido. Válidos: {list(VALID_COMPANY_KEYS)}"})
+
+    started = datetime.now(timezone.utc)
+    try:
+        from sync_engine import SyncService
+        svc = SyncService()
+        metrics = await asyncio.to_thread(
+            svc.sync_pos_targeted,
+            company_key=request.company_key,
+            full=request.full,
+            date_from=request.desde,
+            date_to=request.hasta,
+        )
+        ended = datetime.now(timezone.utc)
+        return {
+            "ok": True,
+            "company_key": request.company_key,
+            "inserted_orders": metrics["inserted_orders"],
+            "updated_orders": metrics["updated_orders"],
+            "inserted_lines": metrics["inserted_lines"],
+            "updated_lines": metrics["updated_lines"],
+            "duration_ms": int((ended - started).total_seconds() * 1000),
+            "last_sync_at": ended.isoformat(),
+        }
+    except Exception as e:
+        ended = datetime.now(timezone.utc)
+        return JSONResponse(status_code=500, content={
+            "ok": False,
+            "company_key": request.company_key,
+            "error": str(e)[:300],
+            "duration_ms": int((ended - started).total_seconds() * 1000),
+        })
 
 
 class OdooSyncRunRequest(BaseModel):

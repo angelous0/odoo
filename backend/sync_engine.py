@@ -669,10 +669,14 @@ class SyncService:
     # POS
     # ================================================================
 
-    def _sync_pos_orders(self, ck, mode, cursor, cs):
+    def _sync_pos_orders(self, ck, mode, cursor, cs, date_from=None, date_to=None):
         uid, pw = self._auth(ck)
         ctx, cid = self._company_ctx(ck)
         base = [('company_id', '=', cid)] if cid else []
+        if date_from:
+            base.append(('date_order', '>=', date_from + ' 00:00:00'))
+        if date_to:
+            base.append(('date_order', '<=', date_to + ' 23:59:59'))
         domain = self._inc_domain(base, cursor, mode)
 
         order_fields = ['id', 'name', 'date_order', 'partner_id', 'user_id',
@@ -762,6 +766,52 @@ class SyncService:
                 time.sleep(wait)
 
         return total_orders + total_lines, max_w
+
+    def sync_pos_targeted(self, company_key, full=False, date_from=None, date_to=None):
+        """Public method for targeted POS sync with detailed metrics."""
+        import psycopg2
+        conn = psycopg2.connect(self.pg_url)
+        conn.autocommit = True
+        cur = conn.cursor()
+
+        # Count before
+        cur.execute("SELECT count(*) FROM odoo.pos_order WHERE company_key=%s", (company_key,))
+        orders_before = cur.fetchone()[0]
+        cur.execute("SELECT count(*) FROM odoo.pos_order_line WHERE company_key=%s", (company_key,))
+        lines_before = cur.fetchone()[0]
+
+        # Get chunk_size from sync_job
+        cur.execute("SELECT chunk_size FROM odoo.sync_job WHERE job_code='POS_ORDERS'")
+        row = cur.fetchone()
+        cs = row[0] if row else 1000
+        conn.close()
+
+        mode = 'FULL' if full else 'INCREMENTAL'
+        cursor = None if full else self._get_cursor('POS_ORDERS')
+
+        total, max_w = self._sync_pos_orders(company_key, mode, cursor, cs,
+                                              date_from=date_from, date_to=date_to)
+
+        # Count after
+        conn = psycopg2.connect(self.pg_url)
+        cur = conn.cursor()
+        cur.execute("SELECT count(*) FROM odoo.pos_order WHERE company_key=%s", (company_key,))
+        orders_after = cur.fetchone()[0]
+        cur.execute("SELECT count(*) FROM odoo.pos_order_line WHERE company_key=%s", (company_key,))
+        lines_after = cur.fetchone()[0]
+        conn.close()
+
+        inserted_orders = max(orders_after - orders_before, 0)
+        inserted_lines = max(lines_after - lines_before, 0)
+        updated_orders = max(total - inserted_orders - inserted_lines, 0)
+
+        return {
+            "inserted_orders": inserted_orders,
+            "updated_orders": updated_orders,
+            "inserted_lines": inserted_lines,
+            "updated_lines": max(total - inserted_orders - updated_orders - inserted_lines, 0),
+            "total_affected": total,
+        }
 
     # ================================================================
     # CREDIT INVOICES (account.invoice con is_credit=True)
