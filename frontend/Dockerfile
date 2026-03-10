@@ -1,8 +1,8 @@
 # Build
 FROM node:18-alpine AS build
 WORKDIR /app
-COPY package.json yarn.lock ./
-RUN yarn install --frozen-lockfile
+COPY package.json ./
+RUN yarn install
 COPY . .
 ENV REACT_APP_BACKEND_URL=https://api.odoo.ambissionindustries.cloud
 RUN yarn build
