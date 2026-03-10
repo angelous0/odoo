@@ -20,10 +20,14 @@ from scheduler import SyncScheduler
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-# MongoDB connection (kept for platform compatibility)
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+# MongoDB connection (optional, only for Emergent platform)
+mongo_url = os.environ.get('MONGO_URL')
+if mongo_url:
+    client = AsyncIOMotorClient(mongo_url)
+    db = client[os.environ.get('DB_NAME', 'odoo_ods')]
+else:
+    client = None
+    db = None
 
 # PostgreSQL connection
 pg_url = os.environ['PG_URL']
@@ -1072,4 +1076,5 @@ app.add_middleware(
 @app.on_event("shutdown")
 async def shutdown_db_client():
     scheduler.stop()
-    client.close()
+    if client:
+        client.close()
