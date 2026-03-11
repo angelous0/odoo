@@ -520,7 +520,7 @@ class SyncService:
         ctx_no_active = {'active_test': False}
         # x_marca is char; x_tipo is many2one; tela/entalle/hilo are many2one
         tmpl_fields = ['id','name','active','sale_ok','purchase_ok','list_price',
-                        'x_marca','x_tipo','tela','entalle','hilo',
+                        'x_marca','x_tipo','tela','entalle','hilo','x_linea_negocio_id',
                         'create_date','create_uid','write_date','write_uid']
         recs = self._paginate(uid, pw, 'product.template', domain, tmpl_fields, cs, ctx=ctx_no_active)
 
@@ -563,19 +563,20 @@ class SyncService:
              _resolve(r.get('entalle'), entalle_map),
              None,                              # tel: not available
              xm2o_name(r.get('hilo')),
+             xm2o_name(r.get('x_linea_negocio_id')),
              xdt(r.get('write_date')), xdt(r.get('create_date')),
              xid(r.get('create_uid')), xid(r.get('write_uid')))
             for r in recs
         ]
         sql = """INSERT INTO odoo.product_template (company_key,odoo_id,name,active,sale_ok,purchase_ok,list_price,
-                 marca,tipo,tela,entalle,tel,hilo,odoo_write_date,odoo_create_date,odoo_create_uid,odoo_write_uid,synced_at)
+                 marca,tipo,tela,entalle,tel,hilo,linea_negocio,odoo_write_date,odoo_create_date,odoo_create_uid,odoo_write_uid,synced_at)
                  VALUES %s ON CONFLICT (company_key,odoo_id) DO UPDATE SET
                  name=EXCLUDED.name,active=EXCLUDED.active,sale_ok=EXCLUDED.sale_ok,purchase_ok=EXCLUDED.purchase_ok,
                  list_price=EXCLUDED.list_price,marca=EXCLUDED.marca,tipo=EXCLUDED.tipo,tela=EXCLUDED.tela,
-                 entalle=EXCLUDED.entalle,tel=EXCLUDED.tel,hilo=EXCLUDED.hilo,
+                 entalle=EXCLUDED.entalle,tel=EXCLUDED.tel,hilo=EXCLUDED.hilo,linea_negocio=EXCLUDED.linea_negocio,
                  odoo_write_date=EXCLUDED.odoo_write_date,odoo_create_date=EXCLUDED.odoo_create_date,
                  odoo_create_uid=EXCLUDED.odoo_create_uid,odoo_write_uid=EXCLUDED.odoo_write_uid,synced_at=now()"""
-        tmpl_template = "('GLOBAL',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())"
+        tmpl_template = "('GLOBAL',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())"
         tmpl_rows = self._batch_exec(sql, tmpl_template, vals)
         max_w = self._max_wd(recs, cursor)
 

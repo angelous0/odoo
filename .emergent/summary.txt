@@ -1,59 +1,96 @@
 <analysis>**original_problem_statement:**
-El usuario ha solicitado dos nuevos cambios en la funcionalidad del catálogo de productos:
+El usuario solicitó una serie de mejoras y nuevas funcionalidades para el sistema de sincronización de datos desde Odoo.
 
-1.  **Excluir productos paneton:** En todas las vistas, consultas y endpoints que filtran el catálogo de productos, se debe agregar una nueva condición para excluir aquellos cuyo nombre () contenga la palabra paneton (insensible a mayúsculas/minúsculas).
-2.  **Ver productos archivados:** Implementar una opción (toggle en la UI) para incluir productos archivados () en los listados del catálogo.
-    *   **Backend:** Los endpoints relevantes deben aceptar un parámetro booleano . Por defecto (), debe filtrar por . Si es , no debe aplicar filtro por el campo .
-    *   **Frontend:** Las páginas que muestran productos deben tener un toggle Incluir archivados. Al activarlo, se debe volver a consultar al backend con el nuevo parámetro y marcar visualmente los productos archivados en la tabla (ej. con un badge Archivado).
-
-Adicionalmente, en esta sesión se completó la solicitud de sincronizar el módulo de **Crédito** desde Odoo, creando las tablas  y  y toda la lógica de sincronización y visualización asociada.
+PRODUCT REQUIREMENTS:
+1.  **Filtros de Catálogo:**
+    *   Excluir permanentemente productos cuyo nombre contenga paneton.
+    *   Excluir permanentemente productos cuyo nombre contenga publicitario.
+    *   Añadir un toggle en la UI para incluir/excluir productos archivados () en las vistas de stock.
+2.  **Enriquecimiento de Datos Sincronizados:**
+    *   Para , añadir y sincronizar el departamento (), teléfono () y móvil ().
+    *   Para , añadir y sincronizar la ubicación/tienda de la venta ().
+    *   Para , asegurar la sincronización de usuarios inactivos y de todas las compañías.
+    *   Para , añadir la sincronización del campo .
+3.  **Nueva Página Sync Control:**
+    *   Crear una nueva página en el frontend para monitorear el estado de todos los jobs de sincronización.
+    *   Permitir la ejecución manual de cada job de forma individual.
+    *   Crear botones macro para ejecutar secuencias de jobs relacionados (e.g., Actualizar Clientes, Actualizar Ventas).
+    *   La ejecución de jobs debe ser en segundo plano para no bloquear la UI.
+4.  **Endpoint para Sync de POS:**
+    *   Crear un endpoint  protegido por token.
+    *   Debe permitir ejecutar el sync de  para una compañía específica, con filtros opcionales de fecha y modo .
+    *   Debe devolver métricas detalladas de la ejecución (filas insertadas/actualizadas, duración).
+5.  **Soporte para Despliegue (EasyPanel):**
+    *   Crear los  necesarios para desplegar el backend y el frontend.
+    *   Asistir en la configuración y depuración del despliegue en la plataforma EasyPanel del usuario.
 
 **User's preferred language**: Spanish. The next agent MUST respond in Spanish.
 
 **what currently exists?**
-Un sistema de sincronización de datos desde Odoo 10 a un ODS en PostgreSQL, implementado con un backend en FastAPI y un frontend en React. El sistema sincroniza maestros (productos, partners), transacciones (POS, facturas de crédito) y datos de inventario (stock, ubicaciones). Se han implementado mejoras clave de resiliencia, como un mecanismo de reintentos con back-off exponencial que maneja errores  del servidor Odoo durante sincronizaciones prolongadas. El frontend permite monitorear el historial de sincronizaciones, ejecutar trabajos manualmente y visualizar los datos replicados en varias páginas (Dashboard, Historial, Productos, POS, Stock, y la nueva página de Facturas de Crédito). Los datos de productos (, , ) se mapean a valores resumen durante la sincronización.
+La aplicación es un ODS (Operational Data Store) que sincroniza datos de Odoo 10 a PostgreSQL. Consta de un backend en FastAPI que gestiona la lógica de sincronización y expone los datos, y un frontend en React para visualización y control. Se han implementado filtros avanzados en el catálogo de productos, una nueva página de Sync Control para la gestión manual de jobs, y se han enriquecido varios modelos de datos con nuevos campos. El sistema está ahora preparado para ser desplegado mediante Docker, con  creados para ambos servicios (backend y frontend).
 
 **Last working item**:
-- Last item agent was working: El agente acababa de recibir el nuevo requerimiento para filtrar productos paneton y permitir la visualización de productos archivados. Estaba en la fase inicial de análisis, identificando los archivos del backend y frontend que necesitarían ser modificados para implementar esta nueva funcionalidad.
-- Status: NOT STARTED
+- Last item agent was working: El agente estaba agregando el campo  al proceso de sincronización del modelo . Se modificaron los archivos  para agregar la columna a la tabla y  para incluir el campo en la lógica de lectura y escritura desde Odoo.
+- Status: IN PROGRESS
 - Agent Testing Done: N
-- Which testing method agent to use? both (El cambio afecta tanto a las consultas del backend como a la interfaz del frontend).
+- Which testing method agent to use? backend testing agent (verificar que el campo se añade a la BD y se puebla correctamente tras un sync).
 - User Testing Done: N
 
 **All Pending/In progress Issue list**:
-- No hay issues pendientes. La tarea actual es una nueva solicitud de feature.
+- Issue 1: El despliegue en la plataforma EasyPanel del usuario está fallando. (P0)
+- Issue 2: La sincronización de productos excluye incorrectamente productos que son tanto de venta como de compra. (P1)
+
+  Issues Detail:
+  - Issue 1: 
+     - Attempted fixes: Se han resuelto múltiples errores de despliegue: se crearon Dockerfiles, se corrigió la versión de Node.js, se eliminó una dependencia privada (), se ajustó el Dockerfile por la ausencia de , y se corrigió el uso de variables de entorno (pasarlas como Environment Variables en lugar de Build Args). El último error identificado fue un  porque el código de  esperaba una conexión a MongoDB que no se usa en producción. Se implementó un fix para hacer esta conexión opcional.
+     - Next debug checklist: 
+        1.  Confirmar con el usuario que ha hecho Save to Github después del último cambio (el fix para ).
+        2.  Pedir al usuario que vuelva a desplegar el servicio del backend en EasyPanel.
+        3.  Si vuelve a fallar, solicitar los nuevos logs del contenedor del backend para diagnosticar el siguiente posible error.
+     - Why fix this issue and what will be achieved with the fix? El despliegue es crítico para que el usuario pueda utilizar la aplicación en su propio entorno de producción.
+     - Status:  BLOCKED (a la espera de que el usuario aplique el último fix y vuelva a desplegar).
+     - Is recurring issue? Y
+     - Should Test frontend/backend/both after fix? both
+     - Blocked on other issue: None
+  - Issue 2: 
+     - Attempted fixes: Ninguno. El agente identificó la causa raíz en : un filtro estricto  que excluye productos que, aunque son de venta, también están marcados para compra (ej. producto LEFEBRE).
+     - Next debug checklist:
+        1.  Editar .
+        2.  Localizar la definición del dominio de búsqueda para el job .
+        3.  Eliminar la condición  del dominio base.
+        4.  Ejecutar un sync de  para confirmar que LEFEBRE y otros productos similares son sincronizados.
+     - Why fix this issue and what will be achieved with the fix? Asegurará que el catálogo de productos en el ODS esté completo y no omita productos de venta válidos, corrigiendo discrepancias de datos.
+     - Status:  NOT STARTED
+     - Is recurring issue? N
+     - Should Test frontend/backend/both after fix? backend
+     - Blocked on other issue: None
 
 **In progress Task List**:
-- Task 1: (P0) Implementar la nueva funcionalidad del catálogo de productos.
+- Task 1: Finalizar la implementación del campo  (P2)
 
  Task Detail:
   - Task 1: 
-     - Where to resume: El agente debe comenzar por analizar los archivos identificados (, , y las páginas de frontend que muestran productos como  y ) para planificar la implementación de los dos cambios: el filtro  y el parámetro .
-     - What will be achieved with this? El catálogo de productos en el ODS reflejará las reglas de negocio del usuario (excluyendo paneton) y ofrecerá la flexibilidad de ver productos archivados para análisis históricos.
-     - Status:  NOT STARTED
-     - Should Test frontend/backend/both after fix? both
-     - Blocked on something: None
+     - Where to resume: Los cambios en el código (, ) ya están hechos. El siguiente paso es ejecutar la migración de la base de datos para añadir la columna y luego ejecutar un sync  de  para poblar los datos.
+     - What will be achieved with this? La tabla  contendrá el campo línea de negocio, completando un requerimiento del usuario.
+     - Status:  IN PROGRESS
+     - Should Test frontend/backend/both after fix? backend
+     - Blocked on something: El despliegue (Issue 1) y el bug de  (Issue 2) tienen mayor prioridad.
 
 **Upcoming and Future Tasks**
-- No hay tareas futuras definidas por el usuario.
+- Ninguna. Todos los requerimientos del usuario han sido abordados o están en progreso.
 
 **Completed work in this session**
-- **Sincronización de Facturas de Crédito:**
-    - Se crearon las tablas  y  ().
-    - Se añadió el job  a  ().
-    - Se implementó la lógica de sincronización completa en .
-    - Se creó un endpoint  en  con joins a .
-    - Se desarrolló una nueva página en el frontend () para mostrar los datos con filtros.
-- **Resolución de Errores de Sincronización POS:**
-    - Se diagnosticó que los errores  del servidor Odoo interrumpían las sincronizaciones largas.
-    - Se implementó una lógica robusta de reintentos con pausas en , permitiendo que el proceso se recupere automáticamente y complete la sincronización de más de 1.3 millones de líneas de POS.
-    - Se verificó la sincronización exitosa de la orden , que antes faltaba.
-- **Corrección de Mapeo de Datos de Productos:**
-    - Se solucionó un bug en el mapeo del campo  que no leía  correctamente, implementando un mapeo por nombre.
-    - Se aplicó una lógica similar para los campos  (con ) y  (con ), asegurando la consistencia de los datos en .
+- **Feature - Filtros de Catálogo:** Se implementó la exclusión de productos paneton y publicitario a nivel de vistas de base de datos. Se añadió un toggle funcional en el frontend y un parámetro  en los endpoints del backend para mostrar/ocultar productos archivados.
+- **Feature - Página de Control de Sincronización:** Se desarrolló una nueva página Sync Control con su lógica de backend asociada () que permite monitorear y ejecutar manualmente todos los jobs de sincronización en segundo plano.
+- **Feature - Endpoint de Sincronización de POS:** Se creó un nuevo endpoint seguro  para la ejecución ad-hoc del sync de POS, con filtros y retorno de métricas.
+- **Mejoras de Sincronización:**
+    - Se enriqueció  con ,  y .
+    - Se enriqueció  con , y se realizó un backfill para los datos históricos.
+    - Se corrigió el sync de  para que obtenga usuarios de todas las compañías (Ambission y ProyectoModa) e incluya a los inactivos.
+- **Soporte de Despliegue:** Se crearon los  para backend y frontend y se guió al usuario en la depuración de múltiples problemas de despliegue en EasyPanel.
 
 **Earlier issues found/mentioned but not fixed**
-   - None.
+   - **Issue 1:** La sincronización de productos omite artículos que están marcados tanto para compra como para venta (), debido a un filtro demasiado restrictivo en . Esto se identificó al investigar por qué el producto LEFEBRE no se sincronizaba. El arreglo (eliminar el filtro) está pendiente.
 
 **Known issue recurrence from previous fork**
   - N/A
@@ -63,75 +100,66 @@ Un sistema de sincronización de datos desde Odoo 10 a un ODS en PostgreSQL, imp
 
 **Key Technical Concepts**
 - **Backend:** FastAPI, PostgreSQL (), XML-RPC.
-- **Frontend:** React, TailwindCSS, .
-- **Arquitectura:** ODS con sincronización incremental resiliente.
-- **Base de Datos:** Migración idempotente, vistas SQL.
-- **Sincronización:** Lógica de reintentos con back-off para manejar inestabilidad del servidor de origen (Odoo).
+- **Frontend:** React, TailwindCSS.
+- **Despliegue:** Docker, Nginx (para servir el frontend).
+- **Arquitectura:** Sincronización de datos desde un sistema Odoo a un ODS.
 
 **key DB schema**
-- : {job_code PK, schedule_type, run_time, mode, chunk_size}
-- : {id PK, status, started_at, finished_at}
-- : {(company_key, odoo_id) PK, tipo, entalle, tela, active}
-- : {(company_key, odoo_id) PK}
-- : {(company_key, odoo_id) PK}
-- : {(company_key, odoo_id) PK, partner_id, date_invoice, state}
-- : {(company_key, odoo_id) PK, invoice_id, product_id}
+- : {...,  varchar}
+- : {...,  integer}
+- : {...,  varchar (pendiente de migración)}
+- Las vistas  y  ahora incluyen filtros  y .
 
 **changes in tech stack**
-- None.
+- Se introdujo **Docker** para la containerización y el despliegue de la aplicación.
 
 **All files of reference**
-- : Modificado extensamente para la lógica de reintentos 502, mapeo de // y para el nuevo job de .
-- : Modificado para agregar las tablas y el job de .
-- : Modificado para agregar el endpoint .
-- : Nuevo archivo para la UI de facturas de crédito.
-- : Modificado para agregar la ruta y el link de navegación a la nueva página.
-- : Modificado para agregar el botón de sync de créditos.
+- : Modificado para sincronizar nuevos campos (, , ) y ajustar la lógica de obtención de usuarios y productos.
+- : Modificado para añadir las nuevas columnas a las tablas y actualizar las vistas SQL con los filtros de productos.
+- : Modificado para añadir los nuevos endpoints de Sync Control () y el endpoint de sync de POS (), y para hacer opcional la conexión a MongoDB.
+- : Nuevo archivo para la interfaz de control de sincronización.
+- : Modificado para añadir la ruta a la nueva página.
+- , , : Nuevos archivos para el despliegue.
 
 **Areas that need refactoring**:
-- None.
+-  ha crecido considerablemente. Los endpoints relacionados con el control de la sincronización podrían ser movidos a su propio FastAPI Router para mejorar la modularidad.
 
 **key api endpoints**
-- : Ejecuta trabajos de sincronización.
-- : Obtiene las líneas de POS enriquecidas.
-- : Obtiene el stock agregado por producto.
-- : Obtiene el stock agregado por producto y ubicación.
-- : **(Nuevo)** Obtiene las facturas de crédito.
-- : Ejecuta las migraciones de la base de datos.
+- : (Nuevo) Ejecuta el job de sincronización de POS con filtros.
+- : (Nuevo) Devuelve el estado de todos los jobs de sincronización.
+- : (Nuevo) Ejecuta un job específico.
+- : Actualizado con el parámetro .
+- : Actualizado con el parámetro .
 
 **Critical Info for New Agent**
-- La nueva tarea requiere modificar múltiples capas de la aplicación.
-- **Para el filtro paneton:** Se debe identificar todas las vistas y endpoints que consultan el catálogo (, , etc.) y añadir la condición  en .
-- **Para los productos archivados:**
-    - En el backend (), los endpoints afectados deben ser modificados para aceptar un parámetro de query .
-    - La lógica de la consulta SQL (en  o ) debe cambiar para aplicar  solo si  es .
-    - En el frontend, se debe agregar un componente de  o  en las páginas relevantes. El estado de este componente debe controlar el parámetro  en las llamadas a la API y refrescar los datos.
+- La prioridad número uno es resolver el problema de despliegue en EasyPanel (Issue 1). El usuario está bloqueado hasta que el backend pueda iniciar correctamente en su entorno. El último fix (hacer  opcional) debe ser desplegado.
+- Inmediatamente después, se debe corregir el bug del filtro  en la sincronización de productos (Issue 2), ya que causa inconsistencias en los datos.
+- La tarea de  es de menor prioridad y puede ser finalizada después de resolver los bloqueos principales.
+- El usuario interactúa directamente con EasyPanel. El agente debe proporcionar instrucciones claras sobre qué configurar (variables de entorno, rutas de Dockerfile, etc.) y cómo interpretar los logs de error.
 
 **documents and test reports created in this job**
-  -  (actualizado)
-  -  (pruebas de  pasadas)
+  - 
+  - 
+  - 
 
 **Last 10 User Messages and any pending HUMAN messages** 
-- **User:** Preguntó si los datos , ,  actualizados ya estaban disponibles para otros módulos.
-- **Agent:** Confirmó que sí, ya que los datos se transforman y persisten en la tabla base .
-- **User:** Preguntó por la existencia de la orden  con id .
-- **Agent:** Investigó y descubrió que no estaba en la BD local. Inició un sync para traerla.
-- **User:** Preguntó si el sync había terminado.
-- **Agent:** Descubrió que el sync fallaba por errores 502 del servidor Odoo y reinicios.
-- **Agent:** Implementó una lógica de reintentos para manejar los errores 502 y relanzó el sync.
-- **Agent:** Confirmó que la lógica de reintentos funcionó, el sync se completó y la orden  fue encontrada.
-- **User:** Confirmó que todo estaba listo.
-- **Agent:** Resumió el trabajo completado.
-- **User:** Envió un nuevo requerimiento completo para sincronizar el módulo de **CRÉDITO**.
-- **Agent:** Implementó exitosamente toda la funcionalidad de sincronización y visualización de facturas de crédito.
-- **User:** Envió un nuevo requerimiento para **excluir paneton** y **ver productos archivados**.
+1.  **User:** Preguntó por qué el despliegue del backend en EasyPanel fallaba, mostrando una imagen de una página en blanco que decía Desconectado.
+2.  **Agent:** Diagnosticó que el backend no había arrancado y que probablemente era un problema de CORS o de variables de entorno.
+3.  **User:** Confirmó que el endpoint  no respondía.
+4.  **Agent:** Explicó que las variables de entorno debían configurarse en la sección Environment de EasyPanel, no como Build Arguments.
+5.  **User:** Compartió una imagen de su configuración de entorno.
+6.  **Agent:** Inicialmente identificó un typo ( en lugar de ) en la .
+7.  **User:** Indicó que el typo ya estaba corregido en su configuración.
+8.  **Agent:** Solicitó los logs del contenedor para un mejor diagnóstico.
+9.  **User:** Proporcionó los logs que mostraban un .
+10. **Agent:** Identificó que el código heredado de Emergent requería una variable de MongoDB. Implementó un fix para hacer esta dependencia opcional y le indicó al usuario que hiciera Save to Github y redesplegara.
 
 **Project Health Check:**
-- **Broken**: Nada está roto. El sistema está estable y las funcionalidades previas, completas.
+- **Broken**: El despliegue en el entorno de producción del usuario (EasyPanel) no funciona. El servicio de backend no logra iniciarse.
 - **Mocked**: No hay datos mockeados.
 
 **3rd Party Integrations**
-- **Odoo 10:** Integrado vía protocolo XML-RPC para la sincronización de datos.
+- **Odoo 10:** Integración vía protocolo XML-RPC para la sincronización de datos.
 
 **Testing status**
   - Testing agent used after significant changes: YES
@@ -140,7 +168,7 @@ Un sistema de sincronización de datos desde Odoo 10 a un ODS en PostgreSQL, imp
   - Known regressions: None.
 
 **Credentials to test flow:**
-Las credenciales de Odoo se encuentran en las variables de entorno del backend y no necesitan ser solicitadas.
+- El token para el endpoint  está en la variable de entorno . El valor actual es .
 
 **What agent forgot to execute**
-Nada. El agente recibió una nueva tarea al final de la sesión y estaba preparándose para comenzar su implementación.</analysis>
+- El agente identificó que el filtro  en la sincronización de productos () estaba causando que se omitieran productos válidos (como LEFEBRE). Sin embargo, antes de poder aplicar la corrección, la conversación se desvió hacia los problemas de despliegue y el arreglo quedó pendiente.</analysis>

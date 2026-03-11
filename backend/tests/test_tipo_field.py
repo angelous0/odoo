@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 load_dotenv('/app/backend/.env')
 
-BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', 'https://catalog-archive.preview.emergentagent.com').rstrip('/')
+BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', 'https://product-catalog-sync.preview.emergentagent.com').rstrip('/')
 
 class TestTipoFieldInPosLinesFull:
     """Tests for /api/pos-lines-full endpoint - tipo field with x_tipo_resumen values"""

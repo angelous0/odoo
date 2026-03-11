@@ -132,6 +132,7 @@ CREATE TABLE IF NOT EXISTS odoo.product_template (
     entalle         TEXT NULL,
     tel             TEXT NULL,
     hilo            TEXT NULL,
+    linea_negocio   TEXT NULL,
     odoo_write_date TIMESTAMPTZ,
     synced_at       TIMESTAMPTZ DEFAULT now(),
     PRIMARY KEY (company_key, odoo_id)
