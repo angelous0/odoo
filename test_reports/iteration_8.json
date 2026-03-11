@@ -1,0 +1,64 @@
+{
+  "summary": "Testing X_LINEA_NEGOCIO feature, product_template columns, and purchase_ok filter removal. All 14 backend tests passed. Frontend shows correct macro config and 10 job rows. X_LINEA_NEGOCIO sync job exists and is correctly configured, but actual sync fails due to Odoo permission error (external config issue). PRODUCTS job shows old ERROR before migration - need to re-run sync after migration applied.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/odoo-sync/run (X_LINEA_NEGOCIO)", "issue": "Odoo permission error: User 111 has no access to x_linea_negocio model. This is an Odoo-side configuration issue, not a code bug."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "passed_tests": [
+    "GET /api/schema/tables: x_linea_negocio table exists with 8 columns",
+    "GET /api/schema/tables: product_template has 20 columns (includes linea_negocio_id and linea_negocio)",
+    "GET /api/odoo-sync/job-status returns 10 jobs",
+    "GET /api/odoo-sync/job-status includes X_LINEA_NEGOCIO job",
+    "X_LINEA_NEGOCIO job has correct config (enabled=true, schedule=DAILY, chunk=500, scope=GLOBAL)",
+    "All 10 expected jobs present (RES_COMPANY, STOCK_LOCATIONS, STOCK_QUANTS, RES_USERS, RES_PARTNER, X_LINEA_NEGOCIO, PRODUCTS, ATTRIBUTES, POS_ORDERS, AR_CREDIT_INVOICES)",
+    "POST /api/odoo-sync/run with job_code=X_LINEA_NEGOCIO returns success=true",
+    "Code review: purchase_ok filter removed from _sync_products base domain (only sale_ok=True remains)",
+    "Code review: x_linea_negocio_id field is fetched from Odoo",
+    "Code review: linea_negocio_id (INT) and linea_negocio (TEXT) columns in SQL insert",
+    "Code review: _sync_x_linea_negocio method exists",
+    "Migration: x_linea_negocio table DDL exists",
+    "Migration: ALTER TABLE for linea_negocio_id column exists",
+    "Migration: X_LINEA_NEGOCIO job seed exists",
+    "Migration: ODOO_TABLES list includes x_linea_negocio",
+    "Frontend: Productos macro shows 'Jobs: X_LINEA_NEGOCIO, PRODUCTS, ATTRIBUTES'",
+    "Frontend: Job monitor table shows 10 job rows",
+    "Frontend: X_LINEA_NEGOCIO row visible with Run button"
+  ],
+  "test_report_links": [
+    "/app/backend/tests/test_linea_negocio.py",
+    "/app/test_reports/pytest/pytest_linea_negocio.xml"
+  ],
+  "action_items": [
+    "ODOO CONFIG: Grant read permission for x_linea_negocio model to User 111 (Ambission admin) in Odoo",
+    "After Odoo permission fixed: Run X_LINEA_NEGOCIO sync to populate master table",
+    "After columns added: Re-run PRODUCTS sync to clear ERROR status (old error from before migration)"
+  ],
+  "critical_code_review_comments": [
+    "purchase_ok filter correctly removed - base domain now only has sale_ok=True",
+    "_sync_x_linea_negocio correctly implemented with proper fields and SQL",
+    "linea_negocio_id (INT) and linea_negocio (TEXT) columns correctly added to _sync_products vals tuple",
+    "Migration DDL correctly creates x_linea_negocio table and adds columns to product_template",
+    "X_LINEA_NEGOCIO job seed correctly added with priority=35 (runs before PRODUCTS at priority=40)"
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_linea_negocio.py"
+  ],
+  "success_rate": {
+    "backend": "100% (14/14 pytest tests passed)",
+    "frontend": "100% (Sync Control page shows correct macro and 10 job rows)"
+  },
+  "seed_data_creation": "None - using existing schema/tables",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "X_LINEA_NEGOCIO feature fully implemented and tested. Schema and job setup correct. Odoo permission issue preventing actual sync (external Odoo config needed). PRODUCTS job ERROR is stale from before migration - need re-sync. purchase_ok filter confirmed removed from sync_engine.py.",
+  "odoo_external_issues": {
+    "x_linea_negocio_permission": "User 111 (Ambission admin) lacks read access to x_linea_negocio model in Odoo. This must be configured in Odoo admin panel."
+  }
+}

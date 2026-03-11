@@ -43,7 +43,7 @@ const MACROS = [
     id: "productos",
     label: "Actualizar Productos",
     icon: Package,
-    jobs: ["PRODUCTS", "ATTRIBUTES"],
+    jobs: ["X_LINEA_NEGOCIO", "PRODUCTS", "ATTRIBUTES"],
     color: "text-emerald-400",
     bg: "hover:bg-emerald-950/40",
   },

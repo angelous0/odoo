@@ -13,7 +13,7 @@ from odoo_client import OdooClient
 
 logger = logging.getLogger(__name__)
 
-MASTER_JOBS = ['RES_COMPANY', 'RES_USERS', 'RES_PARTNER', 'PRODUCTS', 'ATTRIBUTES', 'STOCK_LOCATIONS', 'STOCK_QUANTS']
+MASTER_JOBS = ['RES_COMPANY', 'RES_USERS', 'RES_PARTNER', 'X_LINEA_NEGOCIO', 'PRODUCTS', 'ATTRIBUTES', 'STOCK_LOCATIONS', 'STOCK_QUANTS']
 POS_JOBS = ['POS_ORDERS']
 MULTI_JOBS = ['AR_CREDIT_INVOICES']
 ADVISORY_LOCK_ID = 777777
@@ -283,6 +283,7 @@ class SyncService:
                 'RES_COMPANY': self._sync_res_company,
                 'RES_USERS': self._sync_res_users,
                 'RES_PARTNER': self._sync_res_partner,
+                'X_LINEA_NEGOCIO': self._sync_x_linea_negocio,
                 'PRODUCTS': self._sync_products,
                 'ATTRIBUTES': self._sync_attributes,
                 'STOCK_LOCATIONS': self._sync_stock_locations,
@@ -510,12 +511,33 @@ class SyncService:
         n = self._batch_exec(sql, template, vals)
         return n, self._max_wd(recs, cursor)
 
+    def _sync_x_linea_negocio(self, mode, cursor, cs):
+        """Sync x_linea_negocio master table."""
+        uid, pw = self._auth('Ambission')
+        domain = self._inc_domain([], cursor, mode)
+        fields = ['id', 'name', 'create_date', 'create_uid', 'write_date', 'write_uid']
+        recs = self._paginate(uid, pw, 'x_linea_negocio', domain, fields, cs)
+        vals = [
+            (r['id'], xtxt(r.get('name')),
+             xdt(r.get('create_date')), xid(r.get('create_uid')),
+             xdt(r.get('write_date')), xid(r.get('write_uid')))
+            for r in recs
+        ]
+        sql = """INSERT INTO odoo.x_linea_negocio (company_key,odoo_id,name,
+                 odoo_create_date,odoo_create_uid,odoo_write_date,odoo_write_uid,synced_at)
+                 VALUES %s ON CONFLICT (company_key,odoo_id) DO UPDATE SET
+                 name=EXCLUDED.name,
+                 odoo_create_date=EXCLUDED.odoo_create_date,odoo_create_uid=EXCLUDED.odoo_create_uid,
+                 odoo_write_date=EXCLUDED.odoo_write_date,odoo_write_uid=EXCLUDED.odoo_write_uid,synced_at=now()"""
+        template = "('GLOBAL',%s,%s,%s,%s,%s,%s,now())"
+        n = self._batch_exec(sql, template, vals)
+        return n, self._max_wd(recs, cursor)
+
     def _sync_products(self, mode, cursor, cs):
         uid, pw = self._auth('Ambission')
 
-        # Include archived products (active=False) by removing active filter
-        # and using active_test=False context to bypass Odoo's default active filter
-        base = [('sale_ok','=',True),('purchase_ok','=',False)]
+        # Include archived products and products that are both sale+purchase
+        base = [('sale_ok','=',True)]
         domain = self._inc_domain(base, cursor, mode)
         ctx_no_active = {'active_test': False}
         # x_marca is char; x_tipo is many2one; tela/entalle/hilo are many2one
@@ -563,20 +585,22 @@ class SyncService:
              _resolve(r.get('entalle'), entalle_map),
              None,                              # tel: not available
              xm2o_name(r.get('hilo')),
+             xid(r.get('x_linea_negocio_id')),
              xm2o_name(r.get('x_linea_negocio_id')),
              xdt(r.get('write_date')), xdt(r.get('create_date')),
              xid(r.get('create_uid')), xid(r.get('write_uid')))
             for r in recs
         ]
         sql = """INSERT INTO odoo.product_template (company_key,odoo_id,name,active,sale_ok,purchase_ok,list_price,
-                 marca,tipo,tela,entalle,tel,hilo,linea_negocio,odoo_write_date,odoo_create_date,odoo_create_uid,odoo_write_uid,synced_at)
+                 marca,tipo,tela,entalle,tel,hilo,linea_negocio_id,linea_negocio,odoo_write_date,odoo_create_date,odoo_create_uid,odoo_write_uid,synced_at)
                  VALUES %s ON CONFLICT (company_key,odoo_id) DO UPDATE SET
                  name=EXCLUDED.name,active=EXCLUDED.active,sale_ok=EXCLUDED.sale_ok,purchase_ok=EXCLUDED.purchase_ok,
                  list_price=EXCLUDED.list_price,marca=EXCLUDED.marca,tipo=EXCLUDED.tipo,tela=EXCLUDED.tela,
-                 entalle=EXCLUDED.entalle,tel=EXCLUDED.tel,hilo=EXCLUDED.hilo,linea_negocio=EXCLUDED.linea_negocio,
+                 entalle=EXCLUDED.entalle,tel=EXCLUDED.tel,hilo=EXCLUDED.hilo,
+                 linea_negocio_id=EXCLUDED.linea_negocio_id,linea_negocio=EXCLUDED.linea_negocio,
                  odoo_write_date=EXCLUDED.odoo_write_date,odoo_create_date=EXCLUDED.odoo_create_date,
                  odoo_create_uid=EXCLUDED.odoo_create_uid,odoo_write_uid=EXCLUDED.odoo_write_uid,synced_at=now()"""
-        tmpl_template = "('GLOBAL',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())"
+        tmpl_template = "('GLOBAL',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())"
         tmpl_rows = self._batch_exec(sql, tmpl_template, vals)
         max_w = self._max_wd(recs, cursor)
 

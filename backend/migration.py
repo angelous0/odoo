@@ -497,6 +497,26 @@ CREATE INDEX IF NOT EXISTS idx_stock_quant_prod_loc ON odoo.stock_quant (company
 -- J) CREDIT INVOICES (account.invoice con is_credit=True)
 -- ============================================================
 
+-- X_LINEA_NEGOCIO master table
+CREATE TABLE IF NOT EXISTS odoo.x_linea_negocio (
+    company_key      TEXT NOT NULL,
+    odoo_id          INT NOT NULL,
+    name             TEXT NULL,
+    odoo_create_date TIMESTAMPTZ NULL,
+    odoo_create_uid  INT NULL,
+    odoo_write_date  TIMESTAMPTZ NULL,
+    odoo_write_uid   INT NULL,
+    synced_at        TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY (company_key, odoo_id)
+);
+
+-- Add linea_negocio_id (integer FK) to product_template
+ALTER TABLE odoo.product_template
+  ADD COLUMN IF NOT EXISTS linea_negocio_id INT NULL;
+
+ALTER TABLE odoo.product_template
+  ADD COLUMN IF NOT EXISTS linea_negocio TEXT NULL;
+
 -- J1) odoo.account_invoice_credit (cabecera)
 CREATE TABLE IF NOT EXISTS odoo.account_invoice_credit (
     company_key      TEXT NOT NULL,
@@ -616,6 +636,10 @@ ON CONFLICT (job_code) DO UPDATE SET
 INSERT INTO odoo.sync_job (job_code, enabled, schedule_type, run_time, priority, mode, chunk_size, company_scope)
 VALUES ('AR_CREDIT_INVOICES', true, 'DAILY', '23:40', 70, 'INCREMENTAL', 2000, 'MULTI')
 ON CONFLICT (job_code) DO NOTHING;
+
+INSERT INTO odoo.sync_job (job_code, enabled, schedule_type, run_time, priority, mode, chunk_size, company_scope)
+VALUES ('X_LINEA_NEGOCIO', true, 'DAILY', '23:09', 35, 'INCREMENTAL', 500, 'GLOBAL')
+ON CONFLICT (job_code) DO NOTHING;
 """
 
 # List of all odoo tables (for status queries)
@@ -625,6 +649,7 @@ ODOO_TABLES = [
     "res_company",
     "res_users",
     "res_partner",
+    "x_linea_negocio",
     "stock_location",
     "stock_quant",
     "product_template",
