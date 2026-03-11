@@ -20,54 +20,52 @@ Sistema de sincronizacion de datos desde Odoo 10 a un ODS en PostgreSQL, con bac
 ### Modulos de Datos
 - **Productos:** Sincronizacion con mapeo de tipo/entalle/tela, linea_negocio (id + nombre)
 - **Partners:** Sincronizacion con campos CRM (state_name, phone, mobile)
-- **POS:** Ordenes y lineas con vista enriquecida (v_pos_line_full), location_id
+- **POS:** Ordenes y lineas con vista enriquecida (v_pos_line_full) incluyendo linea_negocio_id y linea_negocio_nombre, location_id
 - **Stock:** Quants, ubicaciones, vistas por producto y por tienda
 - **Facturas de Credito:** Sincronizacion completa con lineas
 - **x_linea_negocio:** Tabla maestra sincronizada desde Odoo
 
 ### Filtros de Catalogo (Feb 2026)
-- **Exclusion "paneton" y "publicitario":** Filtro `NOT ILIKE` en vistas SQL
-- **Toggle archivados:** Parametro `include_archived` en endpoints stock
-- **Sync incluye archivados:** `active_test: False`
+- Exclusion "paneton" y "publicitario" en vistas SQL
+- Toggle archivados en endpoints stock
+- Sync incluye archivados con active_test: False
 
 ### Sync Control (Mar 2026)
-- Pagina Sync Control con monitor de jobs, badges de estado, botones Run
+- Pagina Sync Control con monitor de 10 jobs, badges de estado, botones Run
 - Botones macro: Clientes, Ventas, Productos (X_LINEA_NEGOCIO+PRODUCTS+ATTRIBUTES), Stock, Creditos
 - Endpoints: GET /api/odoo-sync/job-status, POST /api/odoo-sync/run, POST /api/odoo-sync/run-batch
-- Background execution con polling y toast notifications
 
 ### Cambios Mar 11 2026
-- **Nueva tabla x_linea_negocio:** Tabla maestra sincronizada (id, name, audit fields)
-- **Nuevo job X_LINEA_NEGOCIO:** Prioridad 35, antes de PRODUCTS
-- **Campos linea_negocio_id + linea_negocio en product_template:** ID entero y nombre texto
-- **Fix purchase_ok:** Eliminado filtro `('purchase_ok','=',False)` que excluia productos validos
+- Nueva tabla x_linea_negocio con job de sync
+- Campos linea_negocio_id (INT) + linea_negocio (TEXT) en product_template
+- Fix purchase_ok: eliminado filtro que excluia productos validos
+- Vista v_pos_line_full enriquecida con linea_negocio_id y linea_negocio_nombre
+- Endpoint /api/pos-lines-full expone linea_negocio_id y linea_negocio_nombre
 
 ## Endpoints API
-- `POST /api/migrate` - Migracion idempotente
-- `POST /api/sync/run` - Ejecutar sincronizacion
-- `GET /api/sync/status` - Estado de jobs
-- `GET /api/stock-by-product` - Stock por producto (include_archived, only_available)
-- `GET /api/stock-by-location` - Stock por tienda
-- `GET /api/pos-lines-full` - Lineas POS enriquecidas
-- `GET /api/credit-invoices` - Facturas de credito
-- `GET /api/health` - Health check
-- `POST /api/sync/pos` - Sync POS con metricas (protegido por token)
-- `GET /api/odoo-sync/job-status` - Estado de todos los jobs
-- `POST /api/odoo-sync/run` - Ejecutar job individual
-- `POST /api/odoo-sync/run-batch` - Ejecutar batch de jobs
+- POST /api/migrate - Migracion idempotente
+- POST /api/sync/run - Ejecutar sincronizacion
+- GET /api/sync/status - Estado de jobs
+- GET /api/stock-by-product - Stock por producto
+- GET /api/stock-by-location - Stock por tienda
+- GET /api/pos-lines-full - Lineas POS enriquecidas (incluye linea_negocio_id, linea_negocio_nombre)
+- GET /api/credit-invoices - Facturas de credito
+- GET /api/health - Health check
+- POST /api/sync/pos - Sync POS con metricas (protegido por token)
+- GET /api/odoo-sync/job-status - Estado de todos los jobs
+- POST /api/odoo-sync/run - Ejecutar job individual
+- POST /api/odoo-sync/run-batch - Ejecutar batch de jobs
 
-## Schema DB (key tables)
-- `odoo.product_template` - Productos con tipo, entalle, tela, active, linea_negocio_id, linea_negocio
-- `odoo.x_linea_negocio` - Tabla maestra de lineas de negocio
-- `odoo.stock_quant` - Quants de stock
-- `odoo.res_partner` - Partners con state_name, phone, mobile
-- `odoo.pos_order` - Ordenes POS con location_id
+## Schema DB
+- odoo.product_template: incluye linea_negocio_id (INT), linea_negocio (TEXT)
+- odoo.x_linea_negocio: tabla maestra de lineas de negocio
+- odoo.v_pos_line_full: vista enriquecida con linea_negocio_id y linea_negocio_nombre
 - Vistas v_stock_by_product y v_stock_by_product_location (excluyen paneton/publicitario)
 
-## Pending Issues
-- P0: Despliegue EasyPanel - BLOCKED (usuario debe configurar permisos Odoo + redesplegar)
-- Odoo Permission: User 111 necesita acceso lectura a modelo x_linea_negocio
-- PRODUCTS sync necesita re-ejecutarse para limpiar estado ERROR
+## Pending
+- Odoo: Dar permisos lectura a User 111 sobre x_linea_negocio
+- Re-ejecutar PRODUCTS sync FULL para poblar linea_negocio_id/linea_negocio
+- Despliegue EasyPanel (BLOCKED)
 
 ## Backlog
-- Refactoring: Mover endpoints sync control a FastAPI Router separado
+- Refactoring: server.py -> separar endpoints sync control en Router dedicado

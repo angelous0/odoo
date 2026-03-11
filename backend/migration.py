@@ -385,7 +385,9 @@ SELECT
     pt.tipo,
     pt.tela,
     pt.entalle,
-    pt.list_price
+    pt.list_price,
+    pt.linea_negocio_id,
+    pt.linea_negocio    AS linea_negocio_nombre
 FROM odoo.pos_order_line l
 JOIN odoo.v_pos_order_enriched o
     ON o.company_key = l.company_key AND o.odoo_order_id = l.order_id
