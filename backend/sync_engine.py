@@ -515,10 +515,10 @@ class SyncService:
         """Sync x_linea_negocio master table."""
         uid, pw = self._auth('Ambission')
         domain = self._inc_domain([], cursor, mode)
-        fields = ['id', 'name', 'create_date', 'create_uid', 'write_date', 'write_uid']
+        fields = ['id', 'x_name', 'create_date', 'create_uid', 'write_date', 'write_uid']
         recs = self._paginate(uid, pw, 'x_linea_negocio', domain, fields, cs)
         vals = [
-            (r['id'], xtxt(r.get('name')),
+            (r['id'], xtxt(r.get('x_name')),
              xdt(r.get('create_date')), xid(r.get('create_uid')),
              xdt(r.get('write_date')), xid(r.get('write_uid')))
             for r in recs
