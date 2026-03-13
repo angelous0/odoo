@@ -326,6 +326,10 @@ CREATE INDEX IF NOT EXISTS idx_pos_order_line_product
 DROP VIEW IF EXISTS odoo.v_pos_line_full CASCADE;
 DROP VIEW IF EXISTS odoo.v_pos_order_enriched CASCADE;
 
+-- Add vendedor_id before creating views that reference it
+ALTER TABLE odoo.pos_order
+  ADD COLUMN IF NOT EXISTS vendedor_id INT;
+
 -- H1) v_partner_account_map
 CREATE OR REPLACE VIEW odoo.v_partner_account_map AS
 SELECT
@@ -357,14 +361,19 @@ SELECT
     rc.name              AS company_name,
     po.tipo_comp,
     po.num_comp,
-    po.x_pagos
+    po.x_pagos,
+    po.vendedor_id,
+    rv.name              AS vendedor_name
 FROM odoo.pos_order po
 LEFT JOIN odoo.v_partner_account_map map
     ON map.company_key = po.company_key
     AND map.contacto_partner_id = po.partner_id
 LEFT JOIN odoo.res_company rc
     ON rc.company_key = 'GLOBAL'
-    AND rc.odoo_id = po.company_id;
+    AND rc.odoo_id = po.company_id
+LEFT JOIN odoo.res_users rv
+    ON rv.company_key = 'GLOBAL'
+    AND rv.odoo_id = po.vendedor_id;
 
 -- H3) v_pos_line_full (enriched lines for validation)
 CREATE OR REPLACE VIEW odoo.v_pos_line_full AS
@@ -383,6 +392,8 @@ SELECT
     o.tipo_comp,
     o.num_comp,
     o.x_pagos,
+    o.vendedor_id,
+    o.vendedor_name,
     l.order_id,
     l.odoo_id           AS pos_order_line_id,
     l.product_id,
@@ -454,6 +465,8 @@ ALTER TABLE odoo.pos_order
 
 ALTER TABLE odoo.pos_order
   ADD COLUMN IF NOT EXISTS x_pagos TEXT;
+
+-- (vendedor_id must be added before views that reference it)
 
 -- res_company (audit)
 ALTER TABLE odoo.res_company

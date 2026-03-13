@@ -704,7 +704,7 @@ class SyncService:
             base.append(('date_order', '<=', date_to + ' 23:59:59'))
         domain = self._inc_domain(base, cursor, mode)
 
-        order_fields = ['id', 'name', 'date_order', 'partner_id', 'user_id',
+        order_fields = ['id', 'name', 'date_order', 'partner_id', 'user_id', 'vendedor_id',
                         'amount_total', 'amount_tax', 'state',
                         'is_cancel', 'order_cancel', 'x_cliente_principal', 'reserva', 'reserva_use_id',
                         'location_id', 'company_id',
@@ -731,7 +731,7 @@ class SyncService:
 
                 o_vals = [
                     (ck, r['id'], xtxt(r.get('name')), xdt(r.get('date_order')),
-                     xid(r.get('partner_id')), xid(r.get('user_id')),
+                     xid(r.get('partner_id')), xid(r.get('user_id')), xid(r.get('vendedor_id')),
                      xnum(r.get('amount_total')), xnum(r.get('amount_tax')),
                      xtxt(r.get('state')),
                      xbool_nullable(r.get('is_cancel')), xbool_nullable(r.get('order_cancel')),
@@ -743,14 +743,15 @@ class SyncService:
                      xid(r.get('create_uid')), xid(r.get('write_uid')))
                     for r in orders
                 ]
-                o_sql = """INSERT INTO odoo.pos_order (company_key,odoo_id,name,date_order,partner_id,user_id,
+                o_sql = """INSERT INTO odoo.pos_order (company_key,odoo_id,name,date_order,partner_id,user_id,vendedor_id,
                            amount_total,amount_tax,state,is_cancel,order_cancel,
                            x_cliente_principal,reserva,reserva_use_id,location_id,company_id,
                            tipo_comp,num_comp,x_pagos,
                            odoo_write_date,odoo_create_date,odoo_create_uid,odoo_write_uid,synced_at)
                            VALUES %s ON CONFLICT (company_key,odoo_id) DO UPDATE SET
                            name=EXCLUDED.name,date_order=EXCLUDED.date_order,partner_id=EXCLUDED.partner_id,
-                           user_id=EXCLUDED.user_id,amount_total=EXCLUDED.amount_total,amount_tax=EXCLUDED.amount_tax,
+                           user_id=EXCLUDED.user_id,vendedor_id=EXCLUDED.vendedor_id,
+                           amount_total=EXCLUDED.amount_total,amount_tax=EXCLUDED.amount_tax,
                            state=EXCLUDED.state,is_cancel=EXCLUDED.is_cancel,order_cancel=EXCLUDED.order_cancel,
                            x_cliente_principal=EXCLUDED.x_cliente_principal,reserva=EXCLUDED.reserva,
                            reserva_use_id=EXCLUDED.reserva_use_id,location_id=EXCLUDED.location_id,
@@ -758,7 +759,7 @@ class SyncService:
                            num_comp=EXCLUDED.num_comp,x_pagos=EXCLUDED.x_pagos,
                            odoo_write_date=EXCLUDED.odoo_write_date,odoo_create_date=EXCLUDED.odoo_create_date,
                            odoo_create_uid=EXCLUDED.odoo_create_uid,odoo_write_uid=EXCLUDED.odoo_write_uid,synced_at=now()"""
-                total_orders += self._batch_exec(o_sql, "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())", o_vals)
+                total_orders += self._batch_exec(o_sql, "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())", o_vals)
                 max_w = self._max_wd(orders, max_w)
 
                 # Lines for this batch
