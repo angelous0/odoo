@@ -430,6 +430,18 @@ ALTER TABLE odoo.pos_order
 ALTER TABLE odoo.pos_order
   ADD COLUMN IF NOT EXISTS location_id INT;
 
+ALTER TABLE odoo.pos_order
+  ADD COLUMN IF NOT EXISTS company_id INT;
+
+ALTER TABLE odoo.pos_order
+  ADD COLUMN IF NOT EXISTS tipo_comp TEXT;
+
+ALTER TABLE odoo.pos_order
+  ADD COLUMN IF NOT EXISTS num_comp TEXT;
+
+ALTER TABLE odoo.pos_order
+  ADD COLUMN IF NOT EXISTS x_pagos TEXT;
+
 -- res_company (audit)
 ALTER TABLE odoo.res_company
   ADD COLUMN IF NOT EXISTS odoo_create_date TIMESTAMPTZ,
