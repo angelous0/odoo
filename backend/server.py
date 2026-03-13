@@ -680,6 +680,7 @@ async def get_pos_lines_full(
                 cur.execute(f"""
                     SELECT company_key, date_order, cuenta_partner_id, contacto_partner_id, user_id,
                            state, is_cancelled, reserva, reserva_use_id,
+                           company_id, company_name, tipo_comp, num_comp, x_pagos,
                            order_id, pos_order_line_id, product_id, qty, price_unit, discount, price_subtotal,
                            product_tmpl_id, barcode, talla, color, marca, tipo, tela, entalle, list_price,
                            linea_negocio_id, linea_negocio_nombre

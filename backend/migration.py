@@ -352,11 +352,19 @@ SELECT
     po.state,
     po.reserva,
     po.reserva_use_id,
-    (COALESCE(po.is_cancel, false) OR COALESCE(po.order_cancel, false)) AS is_cancelled
+    (COALESCE(po.is_cancel, false) OR COALESCE(po.order_cancel, false)) AS is_cancelled,
+    po.company_id,
+    rc.name              AS company_name,
+    po.tipo_comp,
+    po.num_comp,
+    po.x_pagos
 FROM odoo.pos_order po
 LEFT JOIN odoo.v_partner_account_map map
     ON map.company_key = po.company_key
-    AND map.contacto_partner_id = po.partner_id;
+    AND map.contacto_partner_id = po.partner_id
+LEFT JOIN odoo.res_company rc
+    ON rc.company_key = 'GLOBAL'
+    AND rc.odoo_id = po.company_id;
 
 -- H3) v_pos_line_full (enriched lines for validation)
 CREATE OR REPLACE VIEW odoo.v_pos_line_full AS
@@ -370,6 +378,11 @@ SELECT
     o.is_cancelled,
     o.reserva,
     o.reserva_use_id,
+    o.company_id,
+    o.company_name,
+    o.tipo_comp,
+    o.num_comp,
+    o.x_pagos,
     l.order_id,
     l.odoo_id           AS pos_order_line_id,
     l.product_id,
