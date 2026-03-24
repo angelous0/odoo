@@ -557,6 +557,9 @@ ALTER TABLE odoo.product_template
 ALTER TABLE odoo.product_template
   ADD COLUMN IF NOT EXISTS linea_negocio TEXT NULL;
 
+ALTER TABLE odoo.product_template
+  ADD COLUMN IF NOT EXISTS tipo_resumen TEXT NULL;
+
 -- J1) odoo.account_invoice_credit (cabecera)
 CREATE TABLE IF NOT EXISTS odoo.account_invoice_credit (
     company_key      TEXT NOT NULL,

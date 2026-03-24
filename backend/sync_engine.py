@@ -581,6 +581,7 @@ class SyncService:
              xbool(r.get('sale_ok')), xbool(r.get('purchase_ok')), xnum(r.get('list_price')),
              xtxt(r.get('x_marca')),
              _resolve(r.get('x_tipo'), tipo_map),
+             xm2o_name(r.get('x_tipo')),
              _resolve(r.get('tela'), tela_map),
              _resolve(r.get('entalle'), entalle_map),
              None,                              # tel: not available
@@ -592,15 +593,16 @@ class SyncService:
             for r in recs
         ]
         sql = """INSERT INTO odoo.product_template (company_key,odoo_id,name,active,sale_ok,purchase_ok,list_price,
-                 marca,tipo,tela,entalle,tel,hilo,linea_negocio_id,linea_negocio,odoo_write_date,odoo_create_date,odoo_create_uid,odoo_write_uid,synced_at)
+                 marca,tipo,tipo_resumen,tela,entalle,tel,hilo,linea_negocio_id,linea_negocio,odoo_write_date,odoo_create_date,odoo_create_uid,odoo_write_uid,synced_at)
                  VALUES %s ON CONFLICT (company_key,odoo_id) DO UPDATE SET
                  name=EXCLUDED.name,active=EXCLUDED.active,sale_ok=EXCLUDED.sale_ok,purchase_ok=EXCLUDED.purchase_ok,
-                 list_price=EXCLUDED.list_price,marca=EXCLUDED.marca,tipo=EXCLUDED.tipo,tela=EXCLUDED.tela,
+                 list_price=EXCLUDED.list_price,marca=EXCLUDED.marca,tipo=EXCLUDED.tipo,tipo_resumen=EXCLUDED.tipo_resumen,
+                 tela=EXCLUDED.tela,
                  entalle=EXCLUDED.entalle,tel=EXCLUDED.tel,hilo=EXCLUDED.hilo,
                  linea_negocio_id=EXCLUDED.linea_negocio_id,linea_negocio=EXCLUDED.linea_negocio,
                  odoo_write_date=EXCLUDED.odoo_write_date,odoo_create_date=EXCLUDED.odoo_create_date,
                  odoo_create_uid=EXCLUDED.odoo_create_uid,odoo_write_uid=EXCLUDED.odoo_write_uid,synced_at=now()"""
-        tmpl_template = "('GLOBAL',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())"
+        tmpl_template = "('GLOBAL',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())"
         tmpl_rows = self._batch_exec(sql, tmpl_template, vals)
         max_w = self._max_wd(recs, cursor)
 
