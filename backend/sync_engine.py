@@ -493,7 +493,7 @@ class SyncService:
             base = [('date', '>=', '2026-04-01 00:00:00')]
             domain = self._inc_domain(base, cursor, mode)
             fields = ['id', 'origin', 'product_id', 'product_tmpl_id',
-                       'quantity_done', 'product_qty', 'company_id', 'date',
+                       'product_qty', 'company_id', 'date',
                        'location_id', 'location_dest_id', 'state',
                        'name', 'inventory_id', 'write_date']
             last_id = 0
@@ -508,7 +508,7 @@ class SyncService:
                 vals = [
                     (ck, r['id'], xtxt(r.get('origin')),
                      xid(r.get('product_id')), xid(r.get('product_tmpl_id')),
-                     xnum(r.get('quantity_done')), xnum(r.get('product_qty')),
+                     xnum(r.get('product_qty')),
                      xid(r.get('company_id')),
                      xdt(r.get('date')), xid(r.get('location_id')),
                      xid(r.get('location_dest_id')), xtxt(r.get('state')),
@@ -517,16 +517,16 @@ class SyncService:
                     for r in batch
                 ]
                 sql = """INSERT INTO odoo.stock_move (company_key,odoo_id,origin,product_id,product_tmpl_id,
-                         quantity_done,product_qty,company_id,date,location_id,location_dest_id,state,name,inventory_id,
+                         product_qty,company_id,date,location_id,location_dest_id,state,name,inventory_id,
                          odoo_write_date,synced_at)
                          VALUES %s ON CONFLICT (company_key,odoo_id) DO UPDATE SET
                          origin=EXCLUDED.origin,product_id=EXCLUDED.product_id,product_tmpl_id=EXCLUDED.product_tmpl_id,
-                         quantity_done=EXCLUDED.quantity_done,product_qty=EXCLUDED.product_qty,
+                         product_qty=EXCLUDED.product_qty,
                          company_id=EXCLUDED.company_id,date=EXCLUDED.date,
                          location_id=EXCLUDED.location_id,location_dest_id=EXCLUDED.location_dest_id,
                          state=EXCLUDED.state,name=EXCLUDED.name,inventory_id=EXCLUDED.inventory_id,
                          odoo_write_date=EXCLUDED.odoo_write_date,synced_at=now()"""
-                template = "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())"
+                template = "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())"
                 n = self._batch_exec(sql, template, vals)
                 total += n
                 max_w = self._max_wd(batch, max_w)

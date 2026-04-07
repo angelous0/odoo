@@ -562,7 +562,6 @@ CREATE TABLE IF NOT EXISTS odoo.stock_move (
     origin               TEXT NULL,
     product_id           INT NULL,
     product_tmpl_id      INT NULL,
-    quantity_done        NUMERIC(16,4) NULL,
     product_qty          NUMERIC(16,4) NULL,
     company_id           INT NULL,
     date                 TIMESTAMPTZ NULL,
@@ -582,6 +581,9 @@ CREATE INDEX IF NOT EXISTS idx_stock_move_inventory ON odoo.stock_move (company_
 
 ALTER TABLE odoo.stock_move
   ADD COLUMN IF NOT EXISTS product_qty NUMERIC(16,4) NULL;
+
+ALTER TABLE odoo.stock_move
+  DROP COLUMN IF EXISTS quantity_done;
 
 -- ============================================================
 -- J) CREDIT INVOICES (account.invoice con is_credit=True)
