@@ -554,6 +554,36 @@ CREATE TABLE IF NOT EXISTS odoo.stock_inventory (
 CREATE INDEX IF NOT EXISTS idx_stock_inventory_date ON odoo.stock_inventory (company_key, date DESC);
 
 -- ============================================================
+-- STOCK MOVE
+-- ============================================================
+CREATE TABLE IF NOT EXISTS odoo.stock_move (
+    company_key          TEXT NOT NULL,
+    odoo_id              INT NOT NULL,
+    origin               TEXT NULL,
+    product_id           INT NULL,
+    product_tmpl_id      INT NULL,
+    quantity_done        NUMERIC(16,4) NULL,
+    product_qty          NUMERIC(16,4) NULL,
+    company_id           INT NULL,
+    date                 TIMESTAMPTZ NULL,
+    location_id          INT NULL,
+    location_dest_id     INT NULL,
+    state                TEXT NULL,
+    name                 TEXT NULL,
+    inventory_id         INT NULL,
+    odoo_write_date      TIMESTAMPTZ NULL,
+    synced_at            TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY (company_key, odoo_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_stock_move_date ON odoo.stock_move (company_key, date DESC);
+CREATE INDEX IF NOT EXISTS idx_stock_move_product ON odoo.stock_move (company_key, product_id);
+CREATE INDEX IF NOT EXISTS idx_stock_move_inventory ON odoo.stock_move (company_key, inventory_id);
+
+ALTER TABLE odoo.stock_move
+  ADD COLUMN IF NOT EXISTS product_qty NUMERIC(16,4) NULL;
+
+-- ============================================================
 -- J) CREDIT INVOICES (account.invoice con is_credit=True)
 -- ============================================================
 
@@ -707,6 +737,10 @@ ON CONFLICT (job_code) DO NOTHING;
 INSERT INTO odoo.sync_job (job_code, enabled, schedule_type, run_time, priority, mode, chunk_size, company_scope)
 VALUES ('STOCK_INVENTORY', true, 'DAILY', '23:15', 55, 'INCREMENTAL', 1000, 'MULTI')
 ON CONFLICT (job_code) DO NOTHING;
+
+INSERT INTO odoo.sync_job (job_code, enabled, schedule_type, run_time, priority, mode, chunk_size, company_scope)
+VALUES ('STOCK_MOVE', true, 'DAILY', '23:18', 56, 'INCREMENTAL', 1000, 'MULTI')
+ON CONFLICT (job_code) DO NOTHING;
 """
 
 # List of all odoo tables (for status queries)
@@ -720,6 +754,7 @@ ODOO_TABLES = [
     "stock_location",
     "stock_quant",
     "stock_inventory",
+    "stock_move",
     "product_template",
     "product_product",
     "product_attribute",

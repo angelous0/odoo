@@ -13,7 +13,7 @@ from odoo_client import OdooClient
 
 logger = logging.getLogger(__name__)
 
-MASTER_JOBS = ['RES_COMPANY', 'RES_USERS', 'RES_PARTNER', 'X_LINEA_NEGOCIO', 'PRODUCTS', 'ATTRIBUTES', 'STOCK_LOCATIONS', 'STOCK_QUANTS', 'STOCK_INVENTORY']
+MASTER_JOBS = ['RES_COMPANY', 'RES_USERS', 'RES_PARTNER', 'X_LINEA_NEGOCIO', 'PRODUCTS', 'ATTRIBUTES', 'STOCK_LOCATIONS', 'STOCK_QUANTS', 'STOCK_INVENTORY', 'STOCK_MOVE']
 POS_JOBS = ['POS_ORDERS']
 MULTI_JOBS = ['AR_CREDIT_INVOICES']
 ADVISORY_LOCK_ID = 777777
@@ -289,6 +289,7 @@ class SyncService:
                 'STOCK_LOCATIONS': self._sync_stock_locations,
                 'STOCK_QUANTS': self._sync_stock_quants,
                 'STOCK_INVENTORY': self._sync_stock_inventory,
+                'STOCK_MOVE': self._sync_stock_move,
                 'POS_ORDERS': self._sync_pos_orders,
                 'AR_CREDIT_INVOICES': self._sync_credit_invoices,
             }
@@ -477,6 +478,61 @@ class SyncService:
             total += n
             max_w = self._max_wd(recs, max_w)
             logger.info(f"  stock.inventory {ck}: {n} rows")
+        return total, max_w
+
+    def _sync_stock_move(self, mode, cursor, cs):
+        """Sync stock.move desde 2026-04-01 para ambas compañías."""
+        total = 0
+        max_w = cursor
+        for ck in ('Ambission', 'ProyectoModa'):
+            try:
+                uid, pw = self._auth(ck)
+            except Exception as e:
+                logger.warning(f"stock.move skip {ck}: {e}")
+                continue
+            base = [('date', '>=', '2026-04-01 00:00:00')]
+            domain = self._inc_domain(base, cursor, mode)
+            fields = ['id', 'origin', 'product_id', 'product_tmpl_id',
+                       'quantity_done', 'product_qty', 'company_id', 'date',
+                       'location_id', 'location_dest_id', 'state',
+                       'name', 'inventory_id', 'write_date']
+            last_id = 0
+            while True:
+                page_domain = domain + [('id', '>', last_id)]
+                batch = self.client.search_read(self.odoo_db, uid, pw, 'stock.move',
+                                                page_domain, fields, limit=cs, offset=0, order='id asc')
+                if not batch:
+                    break
+                last_id = max(r['id'] for r in batch)
+                logger.info(f"  stock.move {ck} batch: {len(batch)} (last_id={last_id})")
+                vals = [
+                    (ck, r['id'], xtxt(r.get('origin')),
+                     xid(r.get('product_id')), xid(r.get('product_tmpl_id')),
+                     xnum(r.get('quantity_done')), xnum(r.get('product_qty')),
+                     xid(r.get('company_id')),
+                     xdt(r.get('date')), xid(r.get('location_id')),
+                     xid(r.get('location_dest_id')), xtxt(r.get('state')),
+                     xtxt(r.get('name')), xid(r.get('inventory_id')),
+                     xdt(r.get('write_date')))
+                    for r in batch
+                ]
+                sql = """INSERT INTO odoo.stock_move (company_key,odoo_id,origin,product_id,product_tmpl_id,
+                         quantity_done,product_qty,company_id,date,location_id,location_dest_id,state,name,inventory_id,
+                         odoo_write_date,synced_at)
+                         VALUES %s ON CONFLICT (company_key,odoo_id) DO UPDATE SET
+                         origin=EXCLUDED.origin,product_id=EXCLUDED.product_id,product_tmpl_id=EXCLUDED.product_tmpl_id,
+                         quantity_done=EXCLUDED.quantity_done,product_qty=EXCLUDED.product_qty,
+                         company_id=EXCLUDED.company_id,date=EXCLUDED.date,
+                         location_id=EXCLUDED.location_id,location_dest_id=EXCLUDED.location_dest_id,
+                         state=EXCLUDED.state,name=EXCLUDED.name,inventory_id=EXCLUDED.inventory_id,
+                         odoo_write_date=EXCLUDED.odoo_write_date,synced_at=now()"""
+                template = "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())"
+                n = self._batch_exec(sql, template, vals)
+                total += n
+                max_w = self._max_wd(batch, max_w)
+                if len(batch) < cs:
+                    break
+            logger.info(f"  stock.move {ck} total: {total}")
         return total, max_w
 
     def _sync_res_users(self, mode, cursor, cs):
