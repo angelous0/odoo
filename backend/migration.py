@@ -534,6 +534,26 @@ CREATE INDEX IF NOT EXISTS idx_stock_quant_location ON odoo.stock_quant (company
 CREATE INDEX IF NOT EXISTS idx_stock_quant_prod_loc ON odoo.stock_quant (company_key, product_id, location_id);
 
 -- ============================================================
+-- STOCK INVENTORY
+-- ============================================================
+CREATE TABLE IF NOT EXISTS odoo.stock_inventory (
+    company_key          TEXT NOT NULL,
+    odoo_id              INT NOT NULL,
+    name                 TEXT NULL,
+    date                 TIMESTAMPTZ NULL,
+    state                TEXT NULL,
+    company_id           INT NULL,
+    x_es_ingreso_produccion BOOLEAN NULL,
+    location_id          INT NULL,
+    odoo_create_uid      INT NULL,
+    odoo_write_date      TIMESTAMPTZ NULL,
+    synced_at            TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY (company_key, odoo_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_stock_inventory_date ON odoo.stock_inventory (company_key, date DESC);
+
+-- ============================================================
 -- J) CREDIT INVOICES (account.invoice con is_credit=True)
 -- ============================================================
 
@@ -683,6 +703,10 @@ ON CONFLICT (job_code) DO NOTHING;
 INSERT INTO odoo.sync_job (job_code, enabled, schedule_type, run_time, priority, mode, chunk_size, company_scope)
 VALUES ('X_LINEA_NEGOCIO', true, 'DAILY', '23:09', 35, 'INCREMENTAL', 500, 'GLOBAL')
 ON CONFLICT (job_code) DO NOTHING;
+
+INSERT INTO odoo.sync_job (job_code, enabled, schedule_type, run_time, priority, mode, chunk_size, company_scope)
+VALUES ('STOCK_INVENTORY', true, 'DAILY', '23:15', 55, 'INCREMENTAL', 1000, 'MULTI')
+ON CONFLICT (job_code) DO NOTHING;
 """
 
 # List of all odoo tables (for status queries)
@@ -695,6 +719,7 @@ ODOO_TABLES = [
     "x_linea_negocio",
     "stock_location",
     "stock_quant",
+    "stock_inventory",
     "product_template",
     "product_product",
     "product_attribute",

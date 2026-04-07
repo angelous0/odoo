@@ -13,7 +13,7 @@ from odoo_client import OdooClient
 
 logger = logging.getLogger(__name__)
 
-MASTER_JOBS = ['RES_COMPANY', 'RES_USERS', 'RES_PARTNER', 'X_LINEA_NEGOCIO', 'PRODUCTS', 'ATTRIBUTES', 'STOCK_LOCATIONS', 'STOCK_QUANTS']
+MASTER_JOBS = ['RES_COMPANY', 'RES_USERS', 'RES_PARTNER', 'X_LINEA_NEGOCIO', 'PRODUCTS', 'ATTRIBUTES', 'STOCK_LOCATIONS', 'STOCK_QUANTS', 'STOCK_INVENTORY']
 POS_JOBS = ['POS_ORDERS']
 MULTI_JOBS = ['AR_CREDIT_INVOICES']
 ADVISORY_LOCK_ID = 777777
@@ -288,6 +288,7 @@ class SyncService:
                 'ATTRIBUTES': self._sync_attributes,
                 'STOCK_LOCATIONS': self._sync_stock_locations,
                 'STOCK_QUANTS': self._sync_stock_quants,
+                'STOCK_INVENTORY': self._sync_stock_inventory,
                 'POS_ORDERS': self._sync_pos_orders,
                 'AR_CREDIT_INVOICES': self._sync_credit_invoices,
             }
@@ -440,6 +441,43 @@ class SyncService:
 
         logger.info(f"  stock.quant sync complete: {total_rows} total rows")
         return total_rows, max_w
+
+    def _sync_stock_inventory(self, mode, cursor, cs):
+        """Sync stock.inventory desde 2026-04-01 para ambas compañías."""
+        total = 0
+        max_w = cursor
+        for ck in ('Ambission', 'ProyectoModa'):
+            try:
+                uid, pw = self._auth(ck)
+            except Exception as e:
+                logger.warning(f"stock.inventory skip {ck}: {e}")
+                continue
+            base = [('date', '>=', '2026-04-01')]
+            domain = self._inc_domain(base, cursor, mode)
+            fields = ['id', 'name', 'date', 'state', 'company_id',
+                       'x_es_ingreso_produccion', 'location_id',
+                       'create_uid', 'write_date']
+            recs = self._paginate(uid, pw, 'stock.inventory', domain, fields, cs)
+            vals = [
+                (ck, r['id'], xtxt(r.get('name')), xdt(r.get('date')),
+                 xtxt(r.get('state')), xid(r.get('company_id')),
+                 xbool_nullable(r.get('x_es_ingreso_produccion')),
+                 xid(r.get('location_id')), xid(r.get('create_uid')),
+                 xdt(r.get('write_date')))
+                for r in recs
+            ]
+            sql = """INSERT INTO odoo.stock_inventory (company_key,odoo_id,name,date,state,company_id,
+                     x_es_ingreso_produccion,location_id,odoo_create_uid,odoo_write_date,synced_at)
+                     VALUES %s ON CONFLICT (company_key,odoo_id) DO UPDATE SET
+                     name=EXCLUDED.name,date=EXCLUDED.date,state=EXCLUDED.state,company_id=EXCLUDED.company_id,
+                     x_es_ingreso_produccion=EXCLUDED.x_es_ingreso_produccion,location_id=EXCLUDED.location_id,
+                     odoo_create_uid=EXCLUDED.odoo_create_uid,odoo_write_date=EXCLUDED.odoo_write_date,synced_at=now()"""
+            template = "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())"
+            n = self._batch_exec(sql, template, vals)
+            total += n
+            max_w = self._max_wd(recs, max_w)
+            logger.info(f"  stock.inventory {ck}: {n} rows")
+        return total, max_w
 
     def _sync_res_users(self, mode, cursor, cs):
         """Sync res.users from all companies (Ambission + ProyectoModa)."""
