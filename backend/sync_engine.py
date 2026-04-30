@@ -155,7 +155,7 @@ class SyncService:
 
     def _inc_domain(self, base, cursor, mode):
         d = list(base)
-        if mode == 'INCREMENTAL' and cursor:
+        if mode and mode.upper() == 'INCREMENTAL' and cursor:
             d.append(('write_date', '>', cursor.strftime('%Y-%m-%d %H:%M:%S')))
         return d
 
@@ -262,6 +262,17 @@ class SyncService:
                         for ck in ['Ambission', 'ProyectoModa']:
                             results.append(self._run_job(jc, ck, em, cs))
 
+            # Refrescar materialized views si se sincronizaron productos/atributos
+            # (caches usados por reportes de stock — bajan queries de 14s a 2.5s)
+            jobs_que_afectan_mv = {'PRODUCTS', 'ATTRIBUTES'}
+            if any(r.get('job_code') in jobs_que_afectan_mv for r in results):
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute("REFRESH MATERIALIZED VIEW CONCURRENTLY odoo.mv_product_variant_flat;")
+                        logger.info("Refreshed mv_product_variant_flat after PRODUCTS/ATTRIBUTES sync")
+                except Exception as e:
+                    logger.warning(f"No se pudo refrescar mv_product_variant_flat: {e}")
+
             return {"success": True, "message": f"Sync: {len(results)} ejecuciones", "results": results}
         except Exception as e:
             logger.error(f"Sync error: {e}", exc_info=True)
@@ -278,7 +289,7 @@ class SyncService:
         log_id = self._insert_log(jc, ck)
         logger.info(f"Sync start: {jc}/{ck}/{mode}")
         try:
-            cursor = self._get_cursor(jc) if mode == 'INCREMENTAL' else None
+            cursor = self._get_cursor(jc) if mode and mode.upper() == 'INCREMENTAL' else None
             handlers = {
                 'RES_COMPANY': self._sync_res_company,
                 'RES_USERS': self._sync_res_users,

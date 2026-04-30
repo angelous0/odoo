@@ -421,6 +421,147 @@ LEFT JOIN odoo.product_template pt
     ON pt.company_key = 'GLOBAL' AND pt.odoo_id = vv.product_tmpl_id;
 
 -- ============================================================
+-- H4) VISTAS "REAL" — VENTAS YA FILTRADAS PARA TODOS LOS MÓDULOS
+-- ============================================================
+-- Estas vistas aplican TODOS los filtros de "venta real" en el DB:
+--   1. No líneas canceladas (v.is_cancelled = false)
+--   2. No reservas (v.reserva = false)
+--   3. No reservas usadas en otra orden (reserva_use_id = 0)
+--   4. No órdenes canceladas completas (po.order_cancel = false)
+--   5. Anti-doble-conteo NV crédito + Factura espejo (mismo monto, cliente,
+--      tienda y fecha ±7d → solo cuenta la facturada)
+--   6. Sin productos prohibidos (correa, bolsa, paneton, probador, provador,
+--      saco, lapicero, publicitario, envio, envío, tallero) y sin "basura"
+--      de Odoo (purchase_ok=true con marca vacía)
+--   7. Sin productos marcados estado='excluido' en la clasificación de Producción
+--
+-- Cualquier módulo (Ventas, CRM, móvil, BI, etc.) puede leer estas vistas
+-- y obtener datos limpios sin replicar la lógica.
+--
+-- Performance: filtros estáticos, optimizables por el query planner.
+-- Si crece a millones de filas, considerar materializar (CREATE MATERIALIZED VIEW).
+
+-- Drop dependientes primero
+DROP VIEW IF EXISTS odoo.v_pos_line_real CASCADE;
+DROP VIEW IF EXISTS odoo.v_pos_order_real CASCADE;
+
+-- H4a) v_pos_order_real — UNA FILA POR ORDEN, ya filtrada
+-- Útil para CRM y reportes a nivel orden (cuántas órdenes hizo un cliente, etc.)
+CREATE OR REPLACE VIEW odoo.v_pos_order_real AS
+SELECT
+    po.company_key,
+    po.odoo_id,
+    po.date_order,
+    po.partner_id,
+    po.x_cliente_principal,
+    COALESCE(po.x_cliente_principal, po.partner_id) AS cliente_efectivo_id,
+    po.user_id,
+    po.vendedor_id,
+    po.amount_total,
+    po.amount_tax,
+    po.location_id,
+    po.state,
+    po.tipo_comp,
+    po.num_comp,
+    po.x_pagos,
+    po.company_id,
+    po.name,
+    po.date_order::date AS fecha,
+    po.odoo_create_date,
+    po.odoo_write_date
+FROM odoo.pos_order po
+WHERE
+    -- Regla 4: orden no cancelada completa
+    (po.order_cancel = false OR po.order_cancel IS NULL)
+    -- Regla 1 (a nivel orden): is_cancel marcado en el header
+    AND (po.is_cancel = false OR po.is_cancel IS NULL)
+    -- Regla 2: no es reserva activa (a nivel orden)
+    AND (po.reserva IS NULL OR po.reserva = false)
+    -- Regla 3: no fue usada de reserva en otra orden
+    AND (po.reserva_use_id = 0 OR po.reserva_use_id IS NULL)
+    -- Regla 5: anti-doble-conteo NV+Factura
+    -- Si esta orden es NV (state='done') y existe una invoiced espejo
+    -- (mismo monto, location, cliente, ±7 días), descartarla
+    AND NOT (
+        po.state = 'done'
+        AND EXISTS (
+            SELECT 1 FROM odoo.pos_order po2
+            WHERE po2.state = 'invoiced'
+              AND po2.amount_total = po.amount_total
+              AND po2.location_id = po.location_id
+              AND COALESCE(po2.x_cliente_principal, po2.partner_id)
+                  = COALESCE(po.x_cliente_principal, po.partner_id)
+              AND po2.date_order BETWEEN po.date_order - INTERVAL '7 days'
+                                     AND po.date_order + INTERVAL '7 days'
+              AND po2.odoo_id <> po.odoo_id
+              AND po2.company_key = po.company_key
+        )
+    );
+
+-- H4b) v_pos_line_real — UNA FILA POR LÍNEA DE VENTA, ya filtrada
+-- Útil para reportes con detalle de producto/color/talla (Ventas, Pareto, etc.)
+CREATE OR REPLACE VIEW odoo.v_pos_line_real AS
+SELECT v.*
+FROM odoo.v_pos_line_full v
+JOIN odoo.v_pos_order_real po_real
+    ON po_real.company_key = v.company_key
+    AND po_real.odoo_id = v.order_id
+WHERE
+    -- Regla 1 (a nivel línea): no líneas canceladas
+    (v.is_cancelled = false OR v.is_cancelled IS NULL)
+    -- Regla 2 (a nivel línea): la línea no es reserva
+    AND (v.reserva IS NULL OR v.reserva = false)
+    AND (v.reserva_use_id = 0 OR v.reserva_use_id IS NULL)
+    -- Regla 6: producto válido (sin palabras prohibidas, sin basura Odoo)
+    AND v.product_tmpl_id NOT IN (
+        SELECT odoo_id FROM odoo.product_template
+        WHERE name ILIKE ANY (ARRAY[
+            '%correa%', '%bolsa%', '%paneton%', '%probador%', '%provador%',
+            '%saco%', '%lapicero%', '%publicitario%', '%envio%', '%envío%',
+            '%tallero%'
+        ])
+        OR (purchase_ok = true AND (marca IS NULL OR marca = ''))
+    )
+    -- Regla 7: producto no marcado como 'excluido' en clasificación
+    AND NOT EXISTS (
+        SELECT 1 FROM produccion.prod_odoo_productos_enriq pe_excl
+        WHERE pe_excl.odoo_template_id = v.product_tmpl_id
+          AND pe_excl.estado = 'excluido'
+    );
+
+-- ============================================================
+-- H5) MATERIALIZED VIEW para acelerar queries de stock por color/talla
+-- ============================================================
+-- v_product_variant_flat usa LATERAL JOINs muy lentos (Nested Loop por fila).
+-- Cachear el resultado en una tabla materializada acelera 5-6× las queries de
+-- reportes (ej. /produccion/reporte-detallado pasa de ~14s a ~2.5s).
+--
+-- Esta MV debe REFRESCARSE después de cada sync de productos:
+--   REFRESH MATERIALIZED VIEW CONCURRENTLY odoo.mv_product_variant_flat;
+-- (CONCURRENTLY no bloquea queries en curso, requiere índice único)
+
+DROP MATERIALIZED VIEW IF EXISTS odoo.mv_product_variant_flat CASCADE;
+CREATE MATERIALIZED VIEW odoo.mv_product_variant_flat AS
+SELECT * FROM odoo.v_product_variant_flat;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_pvf_pkey
+    ON odoo.mv_product_variant_flat (company_key, product_product_id);
+CREATE INDEX IF NOT EXISTS idx_mv_pvf_pp_id
+    ON odoo.mv_product_variant_flat (product_product_id);
+CREATE INDEX IF NOT EXISTS idx_mv_pvf_tmpl
+    ON odoo.mv_product_variant_flat (product_tmpl_id);
+
+-- Índices auxiliares para reportes de stock (acelera JOINs frecuentes)
+CREATE INDEX IF NOT EXISTS idx_stock_quant_product
+    ON odoo.stock_quant(product_id) WHERE qty > 0;
+CREATE INDEX IF NOT EXISTS idx_stock_quant_location
+    ON odoo.stock_quant(location_id) WHERE qty > 0;
+CREATE INDEX IF NOT EXISTS idx_product_product_tmpl
+    ON odoo.product_product(product_tmpl_id) WHERE active = true;
+CREATE INDEX IF NOT EXISTS idx_stock_location_xnombre
+    ON odoo.stock_location(x_nombre) WHERE usage = 'internal' AND active = true;
+
+-- ============================================================
 -- ALTERACIONES: columnas audit (odoo_create_date, odoo_create_uid, odoo_write_uid)
 -- ============================================================
 
@@ -741,8 +882,10 @@ VALUES ('STOCK_INVENTORY', true, 'DAILY', '23:15', 55, 'INCREMENTAL', 1000, 'MUL
 ON CONFLICT (job_code) DO NOTHING;
 
 INSERT INTO odoo.sync_job (job_code, enabled, schedule_type, run_time, priority, mode, chunk_size, company_scope)
-VALUES ('STOCK_MOVE', true, 'DAILY', '23:18', 56, 'INCREMENTAL', 1000, 'MULTI')
-ON CONFLICT (job_code) DO NOTHING;
+VALUES ('STOCK_MOVE', true, 'HOURLY', '23:18', 56, 'INCREMENTAL', 1000, 'MULTI')
+ON CONFLICT (job_code) DO UPDATE SET
+    schedule_type = 'HOURLY',
+    enabled = true;
 """
 
 # List of all odoo tables (for status queries)
@@ -774,6 +917,8 @@ ODOO_VIEWS = [
     "v_partner_account_map",
     "v_pos_order_enriched",
     "v_pos_line_full",
+    "v_pos_order_real",      # NUEVO: órdenes ya filtradas (venta real)
+    "v_pos_line_real",       # NUEVO: líneas ya filtradas (venta real)
     "v_stock_by_product_location",
     "v_stock_by_product",
 ]

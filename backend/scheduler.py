@@ -9,7 +9,13 @@ import os
 
 logger = logging.getLogger(__name__)
 
-MASTER_JOBS = ['RES_COMPANY', 'RES_USERS', 'RES_PARTNER', 'PRODUCTS', 'ATTRIBUTES', 'STOCK_LOCATIONS', 'STOCK_QUANTS']
+# IMPORTANTE: estas listas DEBEN coincidir con las de sync_engine.py.
+# Si agregas un job nuevo, súmalo en ambos archivos (o lo ideal: refactor a módulo común).
+MASTER_JOBS = [
+    'RES_COMPANY', 'RES_USERS', 'RES_PARTNER', 'X_LINEA_NEGOCIO',
+    'PRODUCTS', 'ATTRIBUTES', 'STOCK_LOCATIONS', 'STOCK_QUANTS',
+    'STOCK_INVENTORY', 'STOCK_MOVE',  # ← STOCK_MOVE estaba faltando aquí
+]
 POS_JOBS = ['POS_ORDERS']
 MULTI_JOBS = ['AR_CREDIT_INVOICES']
 
