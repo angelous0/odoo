@@ -750,7 +750,16 @@ class SyncService:
                              VALUES %s ON CONFLICT DO NOTHING"""
                 rel_rows = self._batch_exec(rel_sql, "('GLOBAL',%s,%s)", rel_vals)
 
-        return tmpl_rows + pp_rows + rel_rows, max_w
+        # NOTA (UX): el conteo reportado en sync_run_log.rows_upserted ya NO
+        # incluye `rel_rows` (las filas de product_attribute_value_product_product_rel
+        # que sólo registran "este variant tiene esta talla/color/hilo"). Esas
+        # relaciones se siguen sincronizando — solo no se cuentan para que el
+        # número que ve el usuario en el modal de Estado de Sincronización
+        # corresponda a productos reales (templates + variants), no a
+        # asociaciones internas que inflan el conteo a ~3× sin agregar
+        # información útil al operador.
+        logger.info(f"  PRODUCTS detalle: {tmpl_rows} templates + {pp_rows} variants + {rel_rows} rels (rels no contadas)")
+        return tmpl_rows + pp_rows, max_w
 
     def _sync_attributes(self, mode, cursor, cs):
         uid, pw = self._auth('Ambission')
@@ -873,21 +882,28 @@ class SyncService:
                 oids = [r['id'] for r in orders]
                 if oids:
                     lines = self._paginate(uid, pw, 'pos.order.line', [('order_id', 'in', oids)],
-                                           ['id', 'order_id', 'product_id', 'qty', 'price_unit', 'discount', 'price_subtotal', 'write_date'], cs)
+                                           ['id', 'order_id', 'product_id', 'qty', 'price_unit', 'discount',
+                                            'price_subtotal', 'price_subtotal_incl', 'write_date'], cs)
                     l_vals = [
                         (ck, l['id'], xid(l.get('order_id')), xid(l.get('product_id')),
                          xnum(l.get('qty')), xnum(l.get('price_unit')),
                          xnum(l.get('discount')), xnum(l.get('price_subtotal')),
+                         xnum(l.get('price_subtotal_incl')),
                          xdt(l.get('write_date')))
                         for l in lines
                     ]
+                    # price_subtotal_incl: campo nativo de Odoo (qty × price_unit con descuento e IGV
+                    # ya incluido y redondeado por Odoo). Evita los decimales raros de recalcular
+                    # price_subtotal × 1.18 en SQL del lado nuestro.
                     l_sql = """INSERT INTO odoo.pos_order_line (company_key,odoo_id,order_id,product_id,qty,price_unit,
-                               discount,price_subtotal,odoo_write_date,synced_at)
+                               discount,price_subtotal,price_subtotal_incl,odoo_write_date,synced_at)
                                VALUES %s ON CONFLICT (company_key,odoo_id) DO UPDATE SET
                                order_id=EXCLUDED.order_id,product_id=EXCLUDED.product_id,qty=EXCLUDED.qty,
                                price_unit=EXCLUDED.price_unit,discount=EXCLUDED.discount,
-                               price_subtotal=EXCLUDED.price_subtotal,odoo_write_date=EXCLUDED.odoo_write_date,synced_at=now()"""
-                    total_lines += self._batch_exec(l_sql, "(%s,%s,%s,%s,%s,%s,%s,%s,%s,now())", l_vals)
+                               price_subtotal=EXCLUDED.price_subtotal,
+                               price_subtotal_incl=EXCLUDED.price_subtotal_incl,
+                               odoo_write_date=EXCLUDED.odoo_write_date,synced_at=now()"""
+                    total_lines += self._batch_exec(l_sql, "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())", l_vals)
 
                 batch_errors = 0  # reset on success
                 if len(orders) < cs:
