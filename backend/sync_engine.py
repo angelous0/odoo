@@ -183,26 +183,56 @@ class SyncService:
         finally:
             conn.close()
 
-    def _update_cursor(self, job_code, cursor, ok=True, error=None):
+    def _update_cursor(self, job_code, company_key, cursor, ok=True, error=None):
+        """Actualiza cursor por (job_code, company_key) en sync_job_cursor.
+        También sigue actualizando sync_job (last_run_at, last_error) para
+        compatibilidad con queries de status del frontend Ventas — ese campo
+        se mantiene como "última corrida de cualquier empresa".
+
+        BUG HISTÓRICO: antes el cursor vivía solo en sync_job indexado por
+        job_code, así que cuando Ambission terminaba primero, sobrescribía
+        el cursor con 'ahora' y ProyectoModa al correr después creía que
+        ya estaba al día (cursor > sus write_dates pendientes). Por eso
+        ProyectoModa quedaba siempre atrasado y había que forzarle FULL.
+        El cursor por (job_code, company_key) elimina la dependencia entre
+        empresas.
+        """
         conn = self._conn()
         conn.autocommit = True
         try:
             with conn.cursor() as cur:
                 if ok:
+                    # 1) Cursor por empresa (la fuente de verdad ahora)
+                    cur.execute("""
+                        INSERT INTO odoo.sync_job_cursor (job_code, company_key, last_cursor, updated_at)
+                        VALUES (%s, %s, %s, NOW())
+                        ON CONFLICT (job_code, company_key)
+                        DO UPDATE SET last_cursor = EXCLUDED.last_cursor, updated_at = NOW()
+                    """, (job_code, company_key, cursor))
+                    # 2) Metadata global del job (para frontend Ventas que muestra
+                    #    "última corrida hace X min"). Mantenemos last_cursor también
+                    #    para no romper queries legacy; no se usa para incremental.
                     cur.execute("""UPDATE odoo.sync_job SET last_run_at=now(), last_success_at=now(),
-                                   last_cursor=%s, last_error=NULL WHERE job_code=%s""", (cursor, job_code))
+                                   last_cursor=%s, last_error=NULL WHERE job_code=%s""",
+                                (cursor, job_code))
                 else:
                     cur.execute("""UPDATE odoo.sync_job SET last_run_at=now(), last_error=%s
                                    WHERE job_code=%s""", (str(error)[:500] if error else None, job_code))
         finally:
             conn.close()
 
-    def _get_cursor(self, job_code):
+    def _get_cursor(self, job_code, company_key):
+        """Lee cursor por (job_code, company_key). Si no existe la fila
+        (job nuevo o empresa nueva), devuelve None — equivalente a FULL.
+        El INSERT en _update_cursor crea la fila al primer run exitoso.
+        """
         conn = self._conn()
         conn.autocommit = True
         try:
             with conn.cursor() as cur:
-                cur.execute("SELECT last_cursor FROM odoo.sync_job WHERE job_code=%s", (job_code,))
+                cur.execute("""SELECT last_cursor FROM odoo.sync_job_cursor
+                               WHERE job_code=%s AND company_key=%s""",
+                            (job_code, company_key))
                 r = cur.fetchone()
                 return r[0] if r else None
         finally:
@@ -234,8 +264,36 @@ class SyncService:
             with conn.cursor() as cur:
                 cur.execute("SELECT pg_try_advisory_lock(%s)", (ADVISORY_LOCK_ID,))
                 if not cur.fetchone()[0]:
-                    conn.close()
-                    return {"success": False, "message": "Otra sincronización en curso.", "results": []}
+                    # El lock está tomado. Verificar si está "atascado" (>5 min) —
+                    # ocurre cuando un sync anterior se cortó sin liberar el lock
+                    # (ej. backend crash, cliente que disparó sync y se desconectó).
+                    # En ese caso, matar la conexión zombi y reintentar.
+                    cur.execute("""
+                        SELECT pl.pid, EXTRACT(EPOCH FROM (NOW() - pa.query_start))::int
+                        FROM pg_locks pl
+                        JOIN pg_stat_activity pa USING (pid)
+                        WHERE pl.locktype = 'advisory'
+                          AND pl.objid = %s
+                          AND pl.granted = true
+                        LIMIT 1
+                    """, (ADVISORY_LOCK_ID,))
+                    row = cur.fetchone()
+                    if row and row[1] is not None and row[1] > 300:
+                        zombie_pid, age_secs = row[0], row[1]
+                        logger.warning(
+                            f"Lock zombie detectado: PID {zombie_pid} con lock "
+                            f"hace {age_secs}s. Matando conexión y reintentando."
+                        )
+                        cur.execute("SELECT pg_terminate_backend(%s)", (zombie_pid,))
+                        # Reintentar tomar el lock tras matar al zombie
+                        cur.execute("SELECT pg_try_advisory_lock(%s)", (ADVISORY_LOCK_ID,))
+                        if not cur.fetchone()[0]:
+                            conn.close()
+                            return {"success": False, "message": "Otra sincronización en curso.", "results": []}
+                        # Lock recuperado, continuar con el sync
+                    else:
+                        conn.close()
+                        return {"success": False, "message": "Otra sincronización en curso.", "results": []}
 
             with conn.cursor() as cur:
                 if job_code:
@@ -289,7 +347,10 @@ class SyncService:
         log_id = self._insert_log(jc, ck)
         logger.info(f"Sync start: {jc}/{ck}/{mode}")
         try:
-            cursor = self._get_cursor(jc) if mode and mode.upper() == 'INCREMENTAL' else None
+            # Cursor por (job_code, company_key): cada empresa avanza
+            # independiente. Antes era solo por job_code, lo que causaba
+            # que Ambission "robara" el cursor a ProyectoModa.
+            cursor = self._get_cursor(jc, ck) if mode and mode.upper() == 'INCREMENTAL' else None
             handlers = {
                 'RES_COMPANY': self._sync_res_company,
                 'RES_USERS': self._sync_res_users,
@@ -310,13 +371,13 @@ class SyncService:
             else:
                 rows, new_cursor = h(mode, cursor, cs)
             self._finish_log(log_id, 'OK', rows=rows)
-            self._update_cursor(jc, new_cursor or cursor, ok=True)
+            self._update_cursor(jc, ck, new_cursor or cursor, ok=True)
             logger.info(f"Sync OK: {jc}/{ck} -> {rows} rows")
             return {"job_code": jc, "company_key": ck, "status": "OK", "rows": rows}
         except Exception as e:
             logger.error(f"Sync ERROR: {jc}/{ck}: {e}", exc_info=True)
             self._finish_log(log_id, 'ERROR', error=str(e))
-            self._update_cursor(jc, None, ok=False, error=e)
+            self._update_cursor(jc, ck, None, ok=False, error=e)
             return {"job_code": jc, "company_key": ck, "status": "ERROR", "error": str(e)[:200]}
 
     # ---- Track max write_date ----
@@ -578,9 +639,12 @@ class SyncService:
     def _sync_res_partner(self, mode, cursor, cs):
         uid, pw = self._auth('Ambission')
         domain = self._inc_domain([], cursor, mode)
+        # D5: UBIGEO completo + zip + street2.
+        # state_id ahora se guarda como FK + nombre (antes solo nombre).
         fields = ['id','name','display_name','parent_id','commercial_partner_id',
                    'x_cliente_principal','x_es_principal','mayorista','x_no_llamar','x_ultima_venta',
-                   'vat','phone','mobile','street','city','state_id','active',
+                   'vat','phone','mobile','street','street2','city','zip',
+                   'country_id','state_id','province_id','district_id','active',
                    'create_date','create_uid','write_date','write_uid']
         recs = self._paginate(uid, pw, 'res.partner', domain, fields, cs)
         vals = [
@@ -590,8 +654,13 @@ class SyncService:
              xbool_nullable(r.get('mayorista')), xbool_nullable(r.get('x_no_llamar')),
              xdt(r.get('x_ultima_venta')),
              xtxt(r.get('vat')), xtxt(r.get('phone')), xtxt(r.get('mobile')),
-             xtxt(r.get('street')), xtxt(r.get('city')),
-             xm2o_name(r.get('state_id')),
+             xtxt(r.get('street')), xtxt(r.get('street2')),
+             xtxt(r.get('city')), xtxt(r.get('zip')),
+             # UBIGEO m2o → FK + nombre
+             xid(r.get('country_id')),   xm2o_name(r.get('country_id')),
+             xid(r.get('state_id')),     xm2o_name(r.get('state_id')),
+             xid(r.get('province_id')),  xm2o_name(r.get('province_id')),
+             xid(r.get('district_id')),  xm2o_name(r.get('district_id')),
              xbool(r.get('active')),
              xdt(r.get('write_date')), xdt(r.get('create_date')),
              xid(r.get('create_uid')), xid(r.get('write_uid')))
@@ -599,7 +668,10 @@ class SyncService:
         ]
         sql = """INSERT INTO odoo.res_partner (company_key,odoo_id,name,display_name,parent_id,commercial_partner_id,
                  x_cliente_principal,x_es_principal,mayorista,x_no_llamar,x_ultima_venta,
-                 vat,phone,mobile,street,city,state_name,active,
+                 vat,phone,mobile,street,street2,city,zip,
+                 country_id,country_name,state_id,state_name,
+                 province_id,province_name,district_id,district_name,
+                 active,
                  odoo_write_date,odoo_create_date,odoo_create_uid,odoo_write_uid,synced_at)
                  VALUES %s ON CONFLICT (company_key,odoo_id) DO UPDATE SET
                  name=EXCLUDED.name,display_name=EXCLUDED.display_name,parent_id=EXCLUDED.parent_id,
@@ -608,11 +680,19 @@ class SyncService:
                  mayorista=EXCLUDED.mayorista,x_no_llamar=EXCLUDED.x_no_llamar,
                  x_ultima_venta=EXCLUDED.x_ultima_venta,
                  vat=EXCLUDED.vat,phone=EXCLUDED.phone,mobile=EXCLUDED.mobile,
-                 street=EXCLUDED.street,city=EXCLUDED.city,state_name=EXCLUDED.state_name,active=EXCLUDED.active,
+                 street=EXCLUDED.street,street2=EXCLUDED.street2,
+                 city=EXCLUDED.city,zip=EXCLUDED.zip,
+                 country_id=EXCLUDED.country_id,country_name=EXCLUDED.country_name,
+                 state_id=EXCLUDED.state_id,state_name=EXCLUDED.state_name,
+                 province_id=EXCLUDED.province_id,province_name=EXCLUDED.province_name,
+                 district_id=EXCLUDED.district_id,district_name=EXCLUDED.district_name,
+                 active=EXCLUDED.active,
                  odoo_write_date=EXCLUDED.odoo_write_date,odoo_create_date=EXCLUDED.odoo_create_date,
                  odoo_create_uid=EXCLUDED.odoo_create_uid,odoo_write_uid=EXCLUDED.odoo_write_uid,
                  synced_at=now()"""
-        template = "('GLOBAL',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())"
+        # 30 %s = id + 29 campos (5 nuevos del UBIGEO: street2, zip,
+        # country_id+name, state_id, province_id+name, district_id+name)
+        template = "('GLOBAL'," + ",".join(["%s"] * 30) + ",now())"
         n = self._batch_exec(sql, template, vals)
         return n, self._max_wd(recs, cursor)
 
@@ -941,7 +1021,10 @@ class SyncService:
         conn.close()
 
         mode = 'FULL' if full else 'INCREMENTAL'
-        cursor = None if full else self._get_cursor('POS_ORDERS')
+        # Cursor por (job, empresa) — antes era solo por job y eso causaba
+        # que Ambission y ProyectoModa se pisaran. Ahora cada una tiene
+        # su propio cursor en sync_job_cursor.
+        cursor = None if full else self._get_cursor('POS_ORDERS', company_key)
 
         total, max_w = self._sync_pos_orders(company_key, mode, cursor, cs,
                                               date_from=date_from, date_to=date_to)
