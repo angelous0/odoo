@@ -221,6 +221,31 @@ class SyncService:
         finally:
             conn.close()
 
+    def _refresh_matview_safe(self, mv_name: str):
+        """Refresca una matview (intenta CONCURRENTLY primero, sino simple).
+        No bloquea ni propaga errores — solo loguea. Pensado para correr
+        después de jobs que mueven stock (STOCK_QUANTS / STOCK_MOVE) para
+        mantener actualizadas las matviews dependientes como
+        produccion.mv_stock_quant_resumen (que alimenta /reporte-stock).
+        """
+        try:
+            conn = self._conn()
+            conn.autocommit = True
+            try:
+                with conn.cursor() as cur:
+                    try:
+                        cur.execute(f"REFRESH MATERIALIZED VIEW CONCURRENTLY {mv_name}")
+                        logger.info(f"  REFRESH CONCURRENTLY {mv_name} OK")
+                    except Exception as e_conc:
+                        # CONCURRENTLY requiere UNIQUE INDEX; si falta, fallback simple
+                        logger.warning(f"  REFRESH CONCURRENTLY {mv_name} falló ({e_conc}), reintentando simple")
+                        cur.execute(f"REFRESH MATERIALIZED VIEW {mv_name}")
+                        logger.info(f"  REFRESH simple {mv_name} OK")
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.warning(f"  REFRESH {mv_name} falló (no bloquea sync): {e}")
+
     def _get_cursor(self, job_code, company_key):
         """Lee cursor por (job_code, company_key). Si no existe la fila
         (job nuevo o empresa nueva), devuelve None — equivalente a FULL.
@@ -373,6 +398,14 @@ class SyncService:
             self._finish_log(log_id, 'OK', rows=rows)
             self._update_cursor(jc, ck, new_cursor or cursor, ok=True)
             logger.info(f"Sync OK: {jc}/{ck} -> {rows} rows")
+
+            # Refrescar matviews dependientes después de jobs que mueven
+            # stock. Sin esto, /reporte-stock muestra datos viejos hasta
+            # el próximo refresh manual / nightly. Falla silenciosa para
+            # no bloquear el sync principal.
+            if jc in ('STOCK_QUANTS', 'STOCK_MOVE') and rows > 0:
+                self._refresh_matview_safe('produccion.mv_stock_quant_resumen')
+
             return {"job_code": jc, "company_key": ck, "status": "OK", "rows": rows}
         except Exception as e:
             logger.error(f"Sync ERROR: {jc}/{ck}: {e}", exc_info=True)
@@ -645,6 +678,7 @@ class SyncService:
                    'x_cliente_principal','x_es_principal','mayorista','x_no_llamar','x_ultima_venta',
                    'vat','phone','mobile','street','street2','city','zip',
                    'country_id','state_id','province_id','district_id','active',
+                   'catalog_06_id',
                    'create_date','create_uid','write_date','write_uid']
         recs = self._paginate(uid, pw, 'res.partner', domain, fields, cs)
         vals = [
@@ -662,6 +696,8 @@ class SyncService:
              xid(r.get('province_id')),  xm2o_name(r.get('province_id')),
              xid(r.get('district_id')),  xm2o_name(r.get('district_id')),
              xbool(r.get('active')),
+             # D7) Tipo doc (catalog_06): m2o → FK + nombre (RUC/DNI/CE/Pas)
+             xid(r.get('catalog_06_id')), xm2o_name(r.get('catalog_06_id')),
              xdt(r.get('write_date')), xdt(r.get('create_date')),
              xid(r.get('create_uid')), xid(r.get('write_uid')))
             for r in recs
@@ -672,6 +708,7 @@ class SyncService:
                  country_id,country_name,state_id,state_name,
                  province_id,province_name,district_id,district_name,
                  active,
+                 catalog_06_id,catalog_06_name,
                  odoo_write_date,odoo_create_date,odoo_create_uid,odoo_write_uid,synced_at)
                  VALUES %s ON CONFLICT (company_key,odoo_id) DO UPDATE SET
                  name=EXCLUDED.name,display_name=EXCLUDED.display_name,parent_id=EXCLUDED.parent_id,
@@ -687,12 +724,12 @@ class SyncService:
                  province_id=EXCLUDED.province_id,province_name=EXCLUDED.province_name,
                  district_id=EXCLUDED.district_id,district_name=EXCLUDED.district_name,
                  active=EXCLUDED.active,
+                 catalog_06_id=EXCLUDED.catalog_06_id,catalog_06_name=EXCLUDED.catalog_06_name,
                  odoo_write_date=EXCLUDED.odoo_write_date,odoo_create_date=EXCLUDED.odoo_create_date,
                  odoo_create_uid=EXCLUDED.odoo_create_uid,odoo_write_uid=EXCLUDED.odoo_write_uid,
                  synced_at=now()"""
-        # 30 %s = id + 29 campos (5 nuevos del UBIGEO: street2, zip,
-        # country_id+name, state_id, province_id+name, district_id+name)
-        template = "('GLOBAL'," + ",".join(["%s"] * 30) + ",now())"
+        # 32 %s = id + 31 campos (2 nuevos D7: catalog_06_id, catalog_06_name)
+        template = "('GLOBAL'," + ",".join(["%s"] * 32) + ",now())"
         n = self._batch_exec(sql, template, vals)
         return n, self._max_wd(recs, cursor)
 
@@ -1057,7 +1094,14 @@ class SyncService:
     def _sync_credit_invoices(self, ck, mode, cursor, cs):
         uid, pw = self._auth(ck)
         ctx, cid = self._company_ctx(ck)
-        base = [('is_credit', '=', True), ('type', '=', 'out_invoice')]
+        # Solo facturas NO PAGADAS: state='open'. Las pagadas (paid),
+        # canceladas (cancel) o borrador (draft) no tienen saldo pendiente
+        # y no necesitan estar en cobranzas — reduce volumen de sync.
+        base = [
+            ('is_credit', '=', True),
+            ('type',      '=', 'out_invoice'),
+            ('state',     '=', 'open'),
+        ]
         if cid:
             base.append(('company_id', '=', cid))
         domain = self._inc_domain(base, cursor, mode)
@@ -1159,6 +1203,50 @@ class SyncService:
                 wait = 30 * batch_errors
                 logger.warning(f"  Credit inv batch error at last_id={last_id} ({batch_errors}/3), retry in {wait}s: {e}")
                 time.sleep(wait)
+
+        # ── Auto-limpieza de zombis ──
+        # Como filtramos por state='open', cuando una factura se PAGA en Odoo
+        # ya no aparece en el sync incremental → queda zombi en nuestra DB.
+        # Solución: preguntar a Odoo "de los IDs que tengo guardados, cuáles
+        # ya NO son 'open'?" y borrar esos en una sola query.
+        try:
+            conn = self._conn()
+            with conn.cursor() as cur:
+                cur.execute("SELECT odoo_id FROM odoo.account_invoice_credit WHERE company_key = %s",
+                            (ck,))
+                local_ids = [r[0] for r in cur.fetchall()]
+
+            if local_ids:
+                # Batch en chunks de 5000 para evitar payload gigante en XMLRPC
+                deleted = 0
+                CHUNK = 5000
+                for i in range(0, len(local_ids), CHUNK):
+                    chunk = local_ids[i:i + CHUNK]
+                    no_longer_open = self.client.search(
+                        self.odoo_db, uid, pw, 'account.invoice',
+                        [('id', 'in', chunk),
+                         ('state', '!=', 'open')],
+                        context=ctx,
+                    )
+                    if no_longer_open:
+                        with conn.cursor() as cur:
+                            # Borrar líneas primero (FK lógica)
+                            cur.execute(
+                                "DELETE FROM odoo.account_invoice_credit_line "
+                                "WHERE company_key = %s AND invoice_id = ANY(%s)",
+                                (ck, no_longer_open),
+                            )
+                            cur.execute(
+                                "DELETE FROM odoo.account_invoice_credit "
+                                "WHERE company_key = %s AND odoo_id = ANY(%s)",
+                                (ck, no_longer_open),
+                            )
+                        conn.commit()
+                        deleted += len(no_longer_open)
+                if deleted > 0:
+                    logger.info(f"  Credit inv cleanup: {deleted} facturas pagadas/canceladas removidas")
+        except Exception as e:
+            logger.warning(f"  Credit inv cleanup falló (no es crítico): {e}")
 
         return total_inv + total_lines, max_w
 
