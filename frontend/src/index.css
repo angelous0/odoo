@@ -1,8 +1,12 @@
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Manrope:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap');
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+html, body, #root {
+    height: 100%;
+}
 
 body {
     margin: 0;
@@ -15,33 +19,83 @@ code {
     font-family: 'JetBrains Mono', monospace;
 }
 
+.font-mono-data {
+    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* Explorador ODS design tokens (ver handoff README) */
+:root, :root[data-theme="light"] {
+    --bg: #f4f6f4; --surface: #ffffff; --card: #ffffff; --card2: #f7f8f7;
+    --headrow: #f2f4f2; --border: #e6e9e6; --border2: #d6dad6;
+    --fg: #151a18; --muted: #5c6863; --muted2: #95a09a;
+    --primary: #059669; --primaryText: #047857; --primaryWeak: #ecfdf5; --primaryBorder: #a7f3d0;
+    --danger: #dc2626; --dangerWeak: #fef2f2; --warn: #b45309; --warnWeak: #fff7ec; --warnBorder: #fcd9a3;
+    --rowHover: #f2f5f3; --sel: #ecfdf5;
+    --shadow: 0 1px 2px rgba(16,24,20,.05), 0 14px 34px rgba(16,24,20,.09);
+}
+:root[data-theme="dark"] {
+    --bg: #0a0a0a; --surface: #0f100f; --card: #131413; --card2: #181a18;
+    --headrow: #181a18; --border: #262826; --border2: #343734;
+    --fg: #f3f6f3; --muted: #a0aaa3; --muted2: #6c756e;
+    --primary: #10b981; --primaryText: #34d399; --primaryWeak: rgba(16,185,129,.12); --primaryBorder: rgba(16,185,129,.34);
+    --danger: #f87171; --dangerWeak: rgba(248,113,113,.13); --warn: #fbbf24; --warnWeak: rgba(251,191,36,.11); --warnBorder: rgba(251,191,36,.3);
+    --rowHover: #181b18; --sel: rgba(16,185,129,.11);
+    --shadow: 0 1px 2px rgba(0,0,0,.5), 0 16px 40px rgba(0,0,0,.55);
+}
+
 @layer base {
     :root {
-        --background: 0 0% 4%;
-        --foreground: 0 0% 98%;
-        --card: 0 0% 7%;
-        --card-foreground: 0 0% 98%;
-        --popover: 0 0% 7%;
-        --popover-foreground: 0 0% 98%;
-        --primary: 160 84% 39%;
-        --primary-foreground: 0 0% 0%;
-        --secondary: 0 0% 15%;
-        --secondary-foreground: 0 0% 98%;
-        --muted: 0 0% 15%;
-        --muted-foreground: 240 5% 65%;
-        --accent: 0 0% 15%;
-        --accent-foreground: 0 0% 98%;
-        --destructive: 0 84% 60%;
-        --destructive-foreground: 0 0% 98%;
-        --border: 0 0% 15%;
-        --input: 0 0% 15%;
-        --ring: 160 84% 39%;
-        --chart-1: 160 84% 39%;
+        --background: 120 10% 96%;
+        --foreground: 156 11% 9%;
+        --card: 0 0% 100%;
+        --card-foreground: 156 11% 9%;
+        --popover: 0 0% 100%;
+        --popover-foreground: 156 11% 9%;
+        --primary: 161 94% 30%;
+        --primary-foreground: 0 0% 100%;
+        --secondary: 120 7% 95%;
+        --secondary-foreground: 156 11% 9%;
+        --muted: 120 7% 95%;
+        --muted-foreground: 155 6% 38%;
+        --accent: 120 7% 95%;
+        --accent-foreground: 156 11% 9%;
+        --destructive: 0 72% 51%;
+        --destructive-foreground: 0 0% 100%;
+        --border: 120 6% 91%;
+        --input: 120 6% 91%;
+        --ring: 161 94% 30%;
+        --chart-1: 161 94% 30%;
         --chart-2: 217 91% 60%;
         --chart-3: 47 96% 53%;
         --chart-4: 280 65% 60%;
         --chart-5: 340 75% 55%;
         --radius: 0.5rem;
+    }
+    :root[data-theme="dark"] {
+        --background: 0 0% 4%;
+        --foreground: 120 14% 96%;
+        --card: 120 3% 8%;
+        --card-foreground: 120 14% 96%;
+        --popover: 120 3% 8%;
+        --popover-foreground: 120 14% 96%;
+        --primary: 160 84% 39%;
+        --primary-foreground: 0 0% 0%;
+        --secondary: 120 4% 10%;
+        --secondary-foreground: 120 14% 96%;
+        --muted: 120 4% 10%;
+        --muted-foreground: 138 6% 65%;
+        --accent: 120 4% 10%;
+        --accent-foreground: 120 14% 96%;
+        --destructive: 0 91% 71%;
+        --destructive-foreground: 0 0% 0%;
+        --border: 120 3% 15%;
+        --input: 120 3% 15%;
+        --ring: 160 84% 39%;
     }
 }
 

@@ -1,13 +1,16 @@
 from fastapi import FastAPI, APIRouter, Header
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
 import os
+import io
+import csv
+import json
 import logging
 import asyncio
 from pathlib import Path
 from datetime import datetime, timezone
+from decimal import Decimal
 from pydantic import BaseModel
 from typing import Optional, List
 import psycopg2
@@ -19,15 +22,6 @@ from scheduler import SyncScheduler
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
-
-# MongoDB connection (optional, only for Emergent platform)
-mongo_url = os.environ.get('MONGO_URL')
-if mongo_url:
-    client = AsyncIOMotorClient(mongo_url)
-    db = client[os.environ.get('DB_NAME', 'odoo_ods')]
-else:
-    client = None
-    db = None
 
 # PostgreSQL connection
 pg_url = os.environ['PG_URL']
@@ -46,7 +40,7 @@ scheduler = SyncScheduler()
 
 @contextmanager
 def get_pg_conn():
-    conn = psycopg2.connect(pg_url)
+    conn = psycopg2.connect(pg_url, application_name="odoo_ods_backend")
     try:
         yield conn
     finally:
@@ -82,7 +76,7 @@ async def startup_event():
         logger.warning(f"Auto-migration on startup error: {e}")
     # Cleanup orphan RUNNING entries from previous crash/restart
     try:
-        conn = psycopg2.connect(pg_url)
+        conn = psycopg2.connect(pg_url, application_name="odoo_ods_backend")
         with conn.cursor() as cur:
             cur.execute("""
                 UPDATE odoo.sync_run_log
@@ -98,6 +92,9 @@ async def startup_event():
             logger.info(f"Cleaned {cleaned} orphan RUNNING sync entries")
     except Exception as e:
         logger.warning(f"Cleanup orphan RUNNING failed: {e}")
+    # Aviso de seguridad: sin este token, /sync/pos queda abierto a cualquiera
+    if not os.environ.get('ODOO_SYNC_TOKEN'):
+        logger.warning("ODOO_SYNC_TOKEN no está configurado: los endpoints de sync quedan SIN autenticación.")
     # Start scheduler
     scheduler.start()
 
@@ -1065,12 +1062,546 @@ async def odoo_sync_run_batch(request: OdooSyncBatchRequest):
     return {"success": True, "message": f"Batch de {len(request.job_codes)} jobs iniciado.", "job_codes": request.job_codes}
 
 
+# ----------------------------------------------------------------
+# EXPLORADOR ODS: metadata/relaciones, query genérica, export, monitoreo
+# ----------------------------------------------------------------
+# Solo lectura. No modifica migration.py, sync_engine.py ni las vistas.
+
+ALLOWED_TABLES = set(ODOO_TABLES) | set(ODOO_VIEWS)
+
+TABLE_GROUPS = {
+    'pos_order': 'Ventas', 'pos_order_line': 'Ventas', 'v_pos_order_enriched': 'Ventas',
+    'v_pos_line_full': 'Ventas', 'v_pos_order_real': 'Ventas', 'v_pos_line_real': 'Ventas',
+    'v_partner_account_map': 'Ventas', 'account_invoice_credit': 'Ventas', 'account_invoice_credit_line': 'Ventas',
+    'stock_location': 'Stock', 'stock_quant': 'Stock', 'stock_inventory': 'Stock', 'stock_move': 'Stock',
+    'v_stock_by_product': 'Stock', 'v_stock_by_product_location': 'Stock',
+    'product_template': 'Productos', 'product_product': 'Productos', 'product_attribute': 'Productos',
+    'product_attribute_value': 'Productos', 'product_template_attribute_line': 'Productos',
+    'product_attribute_value_product_product_rel': 'Productos', 'v_product_variant_flat': 'Productos',
+    'res_partner': 'Contactos', 'res_users': 'Contactos', 'res_company': 'Contactos', 'x_linea_negocio': 'Contactos',
+    'sync_job': 'Sistema', 'sync_run_log': 'Sistema',
+}
+FAVORITE_TABLES = {'v_pos_line_real', 'v_stock_by_product'}
+
+TABLE_LABELS = {
+    'pos_order': 'Órdenes POS', 'pos_order_line': 'Líneas POS', 'v_pos_order_enriched': 'Órdenes enriquecidas',
+    'v_pos_line_full': 'Líneas POS completas', 'v_pos_order_real': 'Órdenes · venta real', 'v_pos_line_real': 'Líneas · venta real',
+    'v_partner_account_map': 'Mapa cliente↔cuenta', 'account_invoice_credit': 'Notas de crédito',
+    'account_invoice_credit_line': 'Líneas de crédito', 'stock_quant': 'Stock x ubicación', 'stock_move': 'Movimientos de stock',
+    'stock_inventory': 'Ajustes de inventario', 'stock_location': 'Ubicaciones', 'v_stock_by_product': 'Stock x producto',
+    'v_stock_by_product_location': 'Stock x tienda', 'product_template': 'Productos', 'product_product': 'Variantes',
+    'product_attribute': 'Atributos', 'product_attribute_value': 'Valores de atributo',
+    'product_template_attribute_line': 'Líneas de atributo', 'product_attribute_value_product_product_rel': 'Rel. variante↔atributo',
+    'v_product_variant_flat': 'Variantes (plano)', 'res_partner': 'Clientes / Prov.', 'res_users': 'Usuarios',
+    'res_company': 'Empresas', 'x_linea_negocio': 'Líneas de negocio', 'sync_job': 'Jobs de sync', 'sync_run_log': 'Historial de sync',
+}
+
+# Relaciones reales, tomadas de los JOINs de migration.py (ver README del handoff)
+RELATIONS_MAP = {
+    'v_pos_line_full': {'is_view': True, 'from': ['pos_order_line', 'v_pos_order_enriched', 'v_product_variant_flat', 'product_template'],
+        'refs': [['pos_order', 'order_id'], ['product_product', 'product_id'], ['product_template', 'product_tmpl_id'],
+                 ['res_partner', 'cuenta_partner_id'], ['res_users', 'vendedor_id'], ['res_company', 'company_id']]},
+    'v_pos_line_real': {'is_view': True, 'from': ['v_pos_line_full', 'v_pos_order_real'],
+        'refs': [['pos_order', 'order_id'], ['product_product', 'product_id'], ['res_partner', 'cuenta_partner_id']]},
+    'v_pos_order_real': {'is_view': True, 'from': ['pos_order'],
+        'refs': [['res_partner', 'partner_id'], ['res_users', 'vendedor_id'], ['res_company', 'company_id'], ['stock_location', 'location_id']]},
+    'v_pos_order_enriched': {'is_view': True, 'from': ['pos_order', 'v_partner_account_map'],
+        'refs': [['res_partner', 'cuenta_partner_id'], ['res_users', 'vendedor_id'], ['res_company', 'company_id']]},
+    'pos_order': {'is_view': False,
+        'refs': [['res_partner', 'partner_id'], ['res_users', 'vendedor_id'], ['res_company', 'company_id'], ['stock_location', 'location_id']]},
+    'pos_order_line': {'is_view': False, 'refs': [['pos_order', 'order_id'], ['product_product', 'product_id']]},
+    'product_product': {'is_view': False, 'refs': [['product_template', 'product_tmpl_id']]},
+    'product_template': {'is_view': False, 'refs': [['x_linea_negocio', 'linea_negocio_id']]},
+    'stock_quant': {'is_view': False, 'refs': [['product_product', 'product_id'], ['stock_location', 'location_id']]},
+    'stock_move': {'is_view': False, 'refs': [['product_product', 'product_id'], ['stock_location', 'location_id']]},
+    'account_invoice_credit': {'is_view': False, 'refs': [['res_partner', 'partner_id']]},
+    'account_invoice_credit_line': {'is_view': False, 'refs': [['account_invoice_credit', 'invoice_id'], ['product_product', 'product_id']]},
+    'v_stock_by_product': {'is_view': True, 'from': ['stock_quant', 'product_product', 'product_template'],
+        'refs': [['product_product', 'product_id']]},
+    'v_stock_by_product_location': {'is_view': True, 'from': ['v_stock_by_product', 'stock_location'],
+        'refs': [['product_product', 'product_id'], ['stock_location', 'location_id']]},
+    'v_product_variant_flat': {'is_view': True, 'from': ['product_product', 'product_template'],
+        'refs': [['product_template', 'product_tmpl_id']]},
+    'res_partner': {'is_view': False, 'refs': [['res_company', 'company_id'], ['res_partner', 'parent_id']]},
+}
+
+
+def _relations_ref_by():
+    """Mapa inverso: para cada tabla, quién la referencia (1:N)."""
+    ref_by = {}
+    for tbl, meta in RELATIONS_MAP.items():
+        for target, via in meta.get('refs', []):
+            ref_by.setdefault(target, []).append([tbl, via])
+    return ref_by
+
+
+@api_router.get("/schema/tables-fast")
+async def get_schema_tables_fast():
+    """Como /schema/tables pero usa estimados (pg_class.reltuples / EXPLAIN) en vez de
+    COUNT(*) exacto — evita full scans sobre tablas de millones de filas. Solo lectura,
+    no reemplaza /schema/tables (se mantiene intacto)."""
+    return await asyncio.to_thread(_get_schema_tables_fast_sync)
+
+
+def _get_schema_tables_fast_sync():
+    try:
+        with get_pg_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur, conn.cursor() as plain_cur:
+                tables = []
+                for table_name in ODOO_TABLES:
+                    try:
+                        cur.execute("""
+                            SELECT reltuples::bigint AS est FROM pg_class c
+                            JOIN pg_namespace n ON n.oid = c.relnamespace
+                            WHERE n.nspname = 'odoo' AND c.relname = %s
+                        """, (table_name,))
+                        row = cur.fetchone()
+                        row_count = max(0, row["est"]) if row and row["est"] is not None else 0
+                        cur.execute("""
+                            SELECT count(*) as col_count FROM information_schema.columns
+                            WHERE table_schema = 'odoo' AND table_name = %s
+                        """, (table_name,))
+                        col_count = cur.fetchone()["col_count"]
+                        tables.append({"name": table_name, "type": "TABLE", "row_count": row_count,
+                                        "col_count": col_count, "exists": col_count > 0})
+                    except Exception:
+                        conn.rollback()
+                        tables.append({"name": table_name, "type": "TABLE", "row_count": 0, "col_count": 0, "exists": False})
+
+                for view_name in ODOO_VIEWS:
+                    try:
+                        plain_cur.execute(f'EXPLAIN (FORMAT JSON) SELECT * FROM odoo."{view_name}"')
+                        plan = plain_cur.fetchone()[0]
+                        row_count = int(plan[0]["Plan"]["Plan Rows"])
+                        cur.execute("""
+                            SELECT count(*) as col_count FROM information_schema.columns
+                            WHERE table_schema = 'odoo' AND table_name = %s
+                        """, (view_name,))
+                        col_count = cur.fetchone()["col_count"]
+                        tables.append({"name": view_name, "type": "VIEW", "row_count": row_count,
+                                        "col_count": col_count, "exists": True})
+                    except Exception:
+                        conn.rollback()
+                        tables.append({"name": view_name, "type": "VIEW", "row_count": 0, "col_count": 0, "exists": False})
+        return {"tables": tables}
+    except Exception as e:
+        return {"tables": [], "error": str(e)}
+
+
+@api_router.get("/schema/relations")
+async def get_schema_relations():
+    """Metadata estática (grupo, label, favorito) + mapa de relaciones N:1 / 1:N."""
+    ref_by = _relations_ref_by()
+    tables = {}
+    for name in ALLOWED_TABLES:
+        meta = RELATIONS_MAP.get(name, {})
+        tables[name] = {
+            "group": TABLE_GROUPS.get(name, "Sistema"),
+            "label": TABLE_LABELS.get(name, name),
+            "favorite": name in FAVORITE_TABLES,
+            "is_view": name in ODOO_VIEWS,
+            "from": meta.get("from", []),
+            "refs": meta.get("refs", []),
+            "ref_by": ref_by.get(name, []),
+        }
+    return {"tables": tables}
+
+
+def _table_columns(cur, table):
+    cur.execute("""
+        SELECT column_name, data_type
+        FROM information_schema.columns
+        WHERE table_schema = 'odoo' AND table_name = %s
+        ORDER BY ordinal_position
+    """, (table,))
+    return cur.fetchall()
+
+
+def _pk_fk_columns(cur, table):
+    """PK/FK columns for a base table via pg_constraint. Views return empty sets."""
+    pk_cols, fk_cols = set(), set()
+    try:
+        cur.execute("""
+            SELECT a.attname
+            FROM pg_constraint c
+            JOIN pg_attribute a ON a.attnum = ANY(c.conkey) AND a.attrelid = c.conrelid
+            WHERE c.contype = 'p' AND c.conrelid = %s::regclass
+        """, (f"odoo.{table}",))
+        pk_cols = {r[0] for r in cur.fetchall()}
+        cur.execute("""
+            SELECT a.attname
+            FROM pg_constraint c
+            JOIN pg_attribute a ON a.attnum = ANY(c.conkey) AND a.attrelid = c.conrelid
+            WHERE c.contype = 'f' AND c.conrelid = %s::regclass
+        """, (f"odoo.{table}",))
+        fk_cols = {r[0] for r in cur.fetchall()}
+    except Exception:
+        pass
+    return pk_cols, fk_cols
+
+
+@api_router.get("/schema/table-columns")
+async def get_table_columns(table: str):
+    """Esquema de una tabla/vista: columna, tipo, PK/FK, y tabla de origen (best-effort)."""
+    if table not in ALLOWED_TABLES:
+        return JSONResponse(status_code=400, content={"error": f"Tabla no permitida: {table}"})
+    return await asyncio.to_thread(_get_table_columns_sync, table)
+
+
+def _get_table_columns_sync(table):
+    try:
+        with get_pg_conn() as conn:
+            with conn.cursor() as cur:
+                cols = _table_columns(cur, table)
+                pk_cols, fk_cols = _pk_fk_columns(cur, table)
+                via_to_target = {via: target for target, via in RELATIONS_MAP.get(table, {}).get('refs', [])}
+                columns = []
+                for name, data_type in cols:
+                    key = "PK" if name in pk_cols else ("FK" if (name in fk_cols or name in via_to_target) else "")
+                    columns.append({
+                        "name": name,
+                        "type": data_type,
+                        "key": key,
+                        "origin": via_to_target.get(name, ""),
+                    })
+        return {"table": table, "columns": columns}
+    except Exception as e:
+        return {"table": table, "columns": [], "error": str(e)}
+
+
+_FILTER_OPS = {'es': '=', 'contains': 'ILIKE', 'neq': '<>', 'eq': '=', 'gt': '>', 'lt': '<', 'gte': '>=', 'lte': '<='}
+
+
+def _apply_filters(conditions, params, col_names, prefix, search, text_cols, filters_raw):
+    if search and search.strip() and text_cols:
+        ors = " OR ".join([f'{prefix}"{c}"::text ILIKE %s' for c in text_cols])
+        conditions.append(f"({ors})")
+        params.extend([f"%{search.strip()}%"] * len(text_cols))
+    parsed = []
+    if filters_raw:
+        try:
+            parsed = json.loads(filters_raw) if isinstance(filters_raw, str) else filters_raw
+        except Exception:
+            parsed = []
+    for f in parsed or []:
+        field = f.get('field'); op = f.get('op'); value = f.get('value')
+        if field not in col_names or op not in _FILTER_OPS or value in (None, ''):
+            continue
+        if op == 'contains':
+            conditions.append(f'{prefix}"{field}"::text ILIKE %s')
+            params.append(f"%{value}%")
+        else:
+            conditions.append(f'{prefix}"{field}"::text {_FILTER_OPS[op]} %s')
+            params.append(str(value))
+
+
+def _clean_value(v):
+    if hasattr(v, 'isoformat'):
+        return v.isoformat()
+    if isinstance(v, Decimal):
+        return float(v)
+    return v
+
+
+@api_router.get("/table-data")
+async def get_table_data(
+    table: str,
+    search: Optional[str] = None,
+    sort: Optional[str] = None,
+    dir: Optional[str] = 'desc',
+    filters: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 50,
+):
+    """Consulta genérica con búsqueda, orden y filtros dinámicos por columna para cualquier tabla/vista permitida."""
+    if table not in ALLOWED_TABLES:
+        return JSONResponse(status_code=400, content={"error": f"Tabla no permitida: {table}"})
+    return await asyncio.to_thread(_get_table_data_sync, table, search, sort, dir, filters, page, page_size)
+
+
+def _get_table_data_sync(table, search, sort, dir, filters, page, page_size):
+    try:
+        with get_pg_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cols = _table_columns(cur, table)
+                col_names = {c['column_name'] for c in cols}
+                text_cols = [c['column_name'] for c in cols if c['data_type'] in ('text', 'character varying', 'character')]
+                conditions, params = [], []
+                _apply_filters(conditions, params, col_names, '', search, text_cols, filters)
+                where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+                cur.execute(f'SELECT count(*) as total FROM odoo."{table}" {where}', params)
+                total = cur.fetchone()["total"]
+
+                order_sql = ""
+                if sort and sort in col_names:
+                    d = 'ASC' if str(dir).lower() == 'asc' else 'DESC'
+                    order_sql = f'ORDER BY "{sort}" {d} NULLS LAST'
+                offset = (page - 1) * page_size
+                cur.execute(f'SELECT * FROM odoo."{table}" {where} {order_sql} LIMIT %s OFFSET %s', params + [page_size, offset])
+                rows = cur.fetchall()
+                for r in rows:
+                    for k in list(r.keys()):
+                        r[k] = _clean_value(r[k])
+        return {
+            "rows": rows, "total": total, "page": page, "page_size": page_size,
+            "total_pages": (total + page_size - 1) // page_size if total > 0 else 0,
+            "columns": [c['column_name'] for c in cols],
+        }
+    except Exception as e:
+        return {"rows": [], "total": 0, "page": page, "page_size": page_size, "total_pages": 0, "error": str(e)}
+
+
+class ExportRelatedSpec(BaseModel):
+    table: str
+    columns: List[str] = []
+
+
+class ExportRequest(BaseModel):
+    table: str
+    format: str = 'csv'  # csv | json
+    search: Optional[str] = None
+    sort: Optional[str] = None
+    dir: Optional[str] = 'desc'
+    filters: Optional[List[dict]] = None
+    columns: List[str] = []
+    related: List[ExportRelatedSpec] = []
+    limit: int = 5000
+
+
+@api_router.post("/export")
+async def export_table(req: ExportRequest):
+    """Export server-side (CSV plano o JSON anidado), respeta filtros/orden/venta-real actuales. Con relaciones: JOIN a tablas conectadas."""
+    if req.table not in ALLOWED_TABLES:
+        return JSONResponse(status_code=400, content={"error": f"Tabla no permitida: {req.table}"})
+    rel_meta = RELATIONS_MAP.get(req.table, {})
+    allowed_rel_tables = {t: via for t, via in rel_meta.get('refs', [])}
+    limit = max(1, min(req.limit, 20000))
+
+    def _run_query():
+        with get_pg_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cols = _table_columns(cur, req.table)
+                col_names = {c['column_name'] for c in cols}
+                text_cols = [c['column_name'] for c in cols if c['data_type'] in ('text', 'character varying', 'character')]
+                sel_cols = [c for c in req.columns if c in col_names] or sorted(col_names)
+
+                select_parts = [f'm."{c}" AS "{c}"' for c in sel_cols]
+                joins = []
+                rel_col_map = {}
+                for i, rel in enumerate(req.related):
+                    if rel.table not in allowed_rel_tables or rel.table not in ALLOWED_TABLES:
+                        continue
+                    via = allowed_rel_tables[rel.table]
+                    if via not in col_names:
+                        continue
+                    rcols_info = _table_columns(cur, rel.table)
+                    rcol_names = {c['column_name'] for c in rcols_info}
+                    rsel = [c for c in rel.columns if c in rcol_names]
+                    if not rsel:
+                        continue
+                    join_key = 'odoo_id' if 'odoo_id' in rcol_names else 'id'
+                    if join_key not in rcol_names:
+                        continue
+                    alias = f"r{i}"
+                    joins.append(f'LEFT JOIN odoo."{rel.table}" {alias} ON {alias}."{join_key}" = m."{via}"')
+                    for c in rsel:
+                        select_parts.append(f'{alias}."{c}" AS "{rel.table}__{c}"')
+                    rel_col_map[rel.table] = rsel
+
+                conditions, params = [], []
+                _apply_filters(conditions, params, col_names, 'm.', req.search, text_cols, req.filters)
+                where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+                order_sql = ""
+                if req.sort and req.sort in col_names:
+                    d = 'ASC' if str(req.dir).lower() == 'asc' else 'DESC'
+                    order_sql = f'ORDER BY m."{req.sort}" {d} NULLS LAST'
+
+                sql = f'SELECT {", ".join(select_parts)} FROM odoo."{req.table}" m {" ".join(joins)} {where} {order_sql} LIMIT %s'
+                cur.execute(sql, params + [limit])
+                rows = cur.fetchall()
+        return sel_cols, rel_col_map, rows
+
+    try:
+        sel_cols, rel_col_map, rows = await asyncio.to_thread(_run_query)
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+    if req.format == 'json':
+        out = []
+        for r in rows:
+            obj = {c: _clean_value(r.get(c)) for c in sel_cols}
+            for rel in req.related:
+                if rel.table in rel_col_map:
+                    obj[f"_{rel.table}"] = {c: _clean_value(r.get(f"{rel.table}__{c}")) for c in rel_col_map[rel.table]}
+            out.append(obj)
+        content = json.dumps(out, ensure_ascii=False, indent=2)
+        return Response(content=content, media_type="application/json",
+                         headers={"Content-Disposition": f'attachment; filename="{req.table}.json"'})
+    else:
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        header = list(sel_cols)
+        for rel in req.related:
+            if rel.table in rel_col_map:
+                header += [f"{rel.table}.{c}" for c in rel_col_map[rel.table]]
+        writer.writerow(header)
+        for r in rows:
+            row = [_clean_value(r.get(c)) for c in sel_cols]
+            for rel in req.related:
+                if rel.table in rel_col_map:
+                    row += [_clean_value(r.get(f"{rel.table}__{c}")) for c in rel_col_map[rel.table]]
+            writer.writerow(row)
+        return Response(content=buf.getvalue(), media_type="text/csv",
+                         headers={"Content-Disposition": f'attachment; filename="{req.table}.csv"'})
+
+
+@api_router.get("/venta-real/rule-counts")
+async def get_venta_real_rule_counts():
+    """Cuánto excluye cada una de las 7 reglas de venta real. Solo lectura: replica los
+    predicados de v_pos_line_real/v_pos_order_real (migration.py) sin tocar las vistas."""
+    return await asyncio.to_thread(_get_venta_real_rule_counts_sync)
+
+
+def _get_venta_real_rule_counts_sync():
+    try:
+        with get_pg_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT count(*) as c FROM odoo.v_pos_line_full")
+                universe = cur.fetchone()['c']
+                cur.execute("SELECT count(*) as c FROM odoo.v_pos_line_real")
+                real = cur.fetchone()['c']
+
+                cur.execute("SELECT count(*) as c FROM odoo.v_pos_line_full WHERE is_cancelled = true")
+                r1 = cur.fetchone()['c']
+                cur.execute("SELECT count(*) as c FROM odoo.v_pos_line_full WHERE reserva = true")
+                r2 = cur.fetchone()['c']
+                cur.execute("SELECT count(*) as c FROM odoo.v_pos_line_full WHERE reserva_use_id IS NOT NULL AND reserva_use_id <> 0")
+                r3 = cur.fetchone()['c']
+                cur.execute("""
+                    SELECT count(*) as c FROM odoo.v_pos_line_full v
+                    JOIN odoo.pos_order po ON po.company_key = v.company_key AND po.odoo_id = v.order_id
+                    WHERE po.order_cancel = true
+                """)
+                r4 = cur.fetchone()['c']
+                cur.execute("""
+                    SELECT count(*) as c FROM odoo.v_pos_line_full v
+                    JOIN odoo.pos_order po ON po.company_key = v.company_key AND po.odoo_id = v.order_id
+                    WHERE po.state = 'done' AND EXISTS (
+                        SELECT 1 FROM odoo.pos_order po2
+                        WHERE po2.state = 'invoiced' AND po2.amount_total = po.amount_total
+                          AND po2.location_id = po.location_id
+                          AND COALESCE(po2.x_cliente_principal, po2.partner_id) = COALESCE(po.x_cliente_principal, po.partner_id)
+                          AND po2.date_order BETWEEN po.date_order - INTERVAL '7 days' AND po.date_order + INTERVAL '7 days'
+                          AND po2.odoo_id <> po.odoo_id AND po2.company_key = po.company_key
+                    )
+                """)
+                r5 = cur.fetchone()['c']
+                cur.execute("""
+                    SELECT count(*) as c FROM odoo.v_pos_line_full v
+                    WHERE v.product_tmpl_id IN (
+                        SELECT odoo_id FROM odoo.product_template
+                        WHERE name ILIKE ANY (ARRAY['%correa%','%bolsa%','%paneton%','%probador%','%provador%','%saco%','%lapicero%','%publicitario%','%envio%','%envío%','%tallero%'])
+                        OR (purchase_ok = true AND (marca IS NULL OR marca = ''))
+                    )
+                """)
+                r6 = cur.fetchone()['c']
+                try:
+                    cur.execute("""
+                        SELECT count(*) as c FROM odoo.v_pos_line_full v
+                        WHERE EXISTS (
+                            SELECT 1 FROM produccion.prod_odoo_productos_enriq pe
+                            WHERE pe.odoo_template_id = v.product_tmpl_id AND pe.estado = 'excluido'
+                        )
+                    """)
+                    r7 = cur.fetchone()['c']
+                except Exception:
+                    conn.rollback()
+                    r7 = 0
+        return {
+            "universe": universe, "real": real, "net_excluded": universe - real,
+            "rules": [
+                {"n": 1, "count": r1}, {"n": 2, "count": r2}, {"n": 3, "count": r3}, {"n": 4, "count": r4},
+                {"n": 5, "count": r5}, {"n": 6, "count": r6}, {"n": 7, "count": r7},
+            ],
+        }
+    except Exception as e:
+        return {"universe": 0, "real": 0, "net_excluded": 0, "rules": [], "error": str(e)}
+
+
+@api_router.get("/monitoring/consumers")
+async def get_monitoring_consumers():
+    """Quién se conecta al schema odoo, vía pg_stat_activity."""
+    return await asyncio.to_thread(_get_monitoring_consumers_sync)
+
+
+def _get_monitoring_consumers_sync():
+    try:
+        with get_pg_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("""
+                    SELECT
+                        COALESCE(NULLIF(application_name, ''), usename) AS consumer,
+                        usename,
+                        client_addr::text AS client_addr,
+                        count(*) AS connections,
+                        max(query_start) AS last_query_at,
+                        bool_or(state = 'active') AS has_active
+                    FROM pg_stat_activity
+                    WHERE datname = current_database() AND pid <> pg_backend_pid()
+                    GROUP BY 1, 2, 3
+                    ORDER BY last_query_at DESC NULLS LAST
+                """)
+                rows = cur.fetchall()
+                for r in rows:
+                    if r['last_query_at'] is not None:
+                        r['last_query_at'] = r['last_query_at'].isoformat()
+        return {"consumers": rows}
+    except Exception as e:
+        return {"consumers": [], "error": str(e)}
+
+
+@api_router.get("/monitoring/activity")
+async def get_monitoring_activity(limit: int = 50):
+    """Actividad reciente (queries en curso/recientes) vía pg_stat_activity."""
+    return await asyncio.to_thread(_get_monitoring_activity_sync, limit)
+
+
+def _get_monitoring_activity_sync(limit):
+    try:
+        with get_pg_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("""
+                    SELECT
+                        pid, COALESCE(NULLIF(application_name, ''), usename) AS consumer,
+                        usename, state, query_start, query
+                    FROM pg_stat_activity
+                    WHERE datname = current_database() AND pid <> pg_backend_pid()
+                      AND query IS NOT NULL AND query <> ''
+                    ORDER BY query_start DESC NULLS LAST
+                    LIMIT %s
+                """, (limit,))
+                rows = cur.fetchall()
+                for r in rows:
+                    if r['query_start'] is not None:
+                        r['query_start'] = r['query_start'].isoformat()
+                    if r['query']:
+                        r['query'] = r['query'][:400]
+        return {"activity": rows}
+    except Exception as e:
+        return {"activity": [], "error": str(e)}
+
+
 app.include_router(api_router)
 
+# Nota: wildcard '*' + allow_credentials=True es una combinación inválida según
+# la spec CORS (los navegadores la rechazan). Solo permitimos credentials
+# cuando hay orígenes explícitos configurados.
+_cors_origins = [o.strip() for o in os.environ.get('CORS_ORIGINS', '*').split(',') if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
+    allow_credentials='*' not in _cors_origins,
+    allow_origins=_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -1079,5 +1610,3 @@ app.add_middleware(
 @app.on_event("shutdown")
 async def shutdown_db_client():
     scheduler.stop()
-    if client:
-        client.close()
