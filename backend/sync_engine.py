@@ -638,7 +638,85 @@ class SyncService:
                 if len(batch) < cs:
                     break
             logger.info(f"  stock.move {ck} total: {total}")
+
+        # Detectar movimientos BORRADOS en Odoo. El sync es incremental y un
+        # registro eliminado nunca "cambia": simplemente deja de aparecer, así
+        # que la copia local lo conserva congelado con su último estado. Si ese
+        # estado era 'assigned', el modo Proyectado del reporte de stock lo
+        # sigue descontando para siempre.
+        #   caso real 08/2026: 18 movimientos de MORTAIN GM209→TALLER borrados
+        #   sin despachar restaban 19 unidades del proyectado de esa tienda.
+        self._barrer_pendientes_borrados()
+
         return total, max_w
+
+    def _barrer_pendientes_borrados(self):
+        """Elimina los movimientos PENDIENTES locales que ya no existen en Odoo.
+
+        Barato por diseño. En Odoo un movimiento validado (state='done') NO se
+        puede borrar: es un asiento de inventario. Solo desaparecen los que
+        están en borrador o reservados, que son ~660 de ~270.000 filas. Así que
+        no hace falta releer toda la tabla para detectar borrados: alcanza con
+        preguntar por esos ids concretos y eliminar los que no vuelvan.
+
+        Tarda segundos, por eso corre en CADA sync (también incremental) en vez
+        de depender de una lectura completa periódica.
+
+        Solo borra lo que confirmó ausente: si la llamada a Odoo falla, no toca
+        nada. Un fantasma de más es preferible a perder un dato real.
+        """
+        PEND = ('draft', 'waiting', 'confirmed', 'partially_available', 'assigned')
+        try:
+            conn = self._conn()
+            conn.autocommit = True
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT company_key, odoo_id FROM odoo.stock_move "
+                        "WHERE state = ANY(%s)", (list(PEND),))
+                    locales = cur.fetchall()
+            finally:
+                conn.close()
+            if not locales:
+                return
+
+            por_empresa = {}
+            for ck, oid in locales:
+                por_empresa.setdefault(ck, []).append(oid)
+
+            total_borrados = 0
+            for ck, ids in por_empresa.items():
+                try:
+                    uid, pw = self._auth(ck)
+                except Exception as e:
+                    logger.warning(f"  barrido pendientes: skip {ck} ({e})")
+                    continue
+                vivos = set()
+                for i in range(0, len(ids), 2000):
+                    lote = ids[i:i + 2000]
+                    res = self.client.search_read(
+                        self.odoo_db, uid, pw, 'stock.move',
+                        [('id', 'in', lote)], ['id'], limit=0)
+                    vivos.update(r['id'] for r in res)
+                muertos = [i for i in ids if i not in vivos]
+                if not muertos:
+                    continue
+                conn = self._conn()
+                conn.autocommit = True
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "DELETE FROM odoo.stock_move "
+                            "WHERE company_key = %s AND odoo_id = ANY(%s)",
+                            (ck, muertos))
+                        total_borrados += cur.rowcount
+                finally:
+                    conn.close()
+                logger.info(f"  barrido pendientes {ck}: {len(muertos)} borrados en Odoo, eliminados de la copia")
+            if total_borrados == 0:
+                logger.info(f"  barrido pendientes: 0 fantasmas ({len(locales)} pendientes revisados)")
+        except Exception as e:
+            logger.error(f"  barrido pendientes ERROR: {e}", exc_info=True)
 
     def _sync_res_users(self, mode, cursor, cs):
         """Sync res.users from all companies (Ambission + ProyectoModa)."""
