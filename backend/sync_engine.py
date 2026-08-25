@@ -18,6 +18,40 @@ POS_JOBS = ['POS_ORDERS']
 MULTI_JOBS = ['AR_CREDIT_INVOICES']
 ADVISORY_LOCK_ID = 777777
 
+# Fecha de corte para stock.move / stock.inventory (antes hardcodeada).
+# Configurable en backend/.env sin tocar código.
+STOCK_DATE_FROM = os.environ.get('ODOO_STOCK_DATE_FROM', '2026-01-01')
+
+# ══════════════════════════════════════════════════════════════════════
+#  DE QUÉ ODOO SE LEE
+#
+#  El negocio se muda del Odoo 10 al 19. Durante la transición hace falta
+#  poder apuntar a uno o al otro sin cambiar código, así que la fuente se
+#  elige por variable de entorno:
+#
+#      ODOO_SOURCE_VERSION=10   (por defecto)  → como siempre
+#      ODOO_SOURCE_VERSION=19                  → lee del Odoo 19
+#
+#  ⚠️  Antes de poner 19 hay que tener publicado el puente de ids
+#      (repo Odoo: scripts/puente_ids.py). El mismo número significa
+#      personas distintas en cada sistema —el cliente 538 es MEZA RAMOS
+#      ELENA en el 10 y COTRINA LOPEZ EDUAR en el 19— así que escribir sin
+#      traducir mezcla la historia de 8 años SIN dar ningún error.
+#
+#  Con la versión 19 no se le piden campos sueltos: el propio Odoo devuelve
+#  las filas con la forma del espejo y los ids ya traducidos, con
+#  pos.order.textil_exportar_para_espejo(). La lógica vive allá, al lado de
+#  los datos, y acá solo se insertan.
+# ══════════════════════════════════════════════════════════════════════
+ODOO_SOURCE_VERSION = os.environ.get('ODOO_SOURCE_VERSION', '10').strip()
+LEE_DEL_19 = ODOO_SOURCE_VERSION == '19'
+# El Odoo 19 puede estar en otra dirección (otro server, otro puerto).
+# Si no se define, se usa la misma conexión de siempre.
+ODOO19_URL = os.environ.get('ODOO19_URL') or os.environ.get('ODOO_URL', '')
+ODOO19_DB = os.environ.get('ODOO19_DB') or os.environ.get('ODOO_DB', '')
+ODOO19_USER = os.environ.get('ODOO19_USER', '')
+ODOO19_PASSWORD = os.environ.get('ODOO19_PASSWORD', '')
+
 
 def xid(val):
     """Extract integer id from Odoo many2one field ([id,name] or int or False)."""
@@ -31,6 +65,13 @@ def xid(val):
         return val
     return None
 
+
+
+def nid(val):
+    """False/0/'' -> None (NULL en Postgres). El exportador del Odoo 19 manda
+    False para 'vacío' porque XML-RPC no sabe transmitir None; las columnas de
+    id del espejo son integer y necesitan NULL, no un booleano."""
+    return int(val) if val else None
 
 def xdt(val):
     """Parse Odoo date string to Python datetime or None."""
@@ -263,22 +304,6 @@ class SyncService:
         finally:
             conn.close()
 
-    def _batch_upsert(self, sql_template, values, page_size=500):
-        """Batch upsert using execute_values for performance."""
-        if not values:
-            return 0
-        conn = self._conn()
-        try:
-            with conn.cursor() as cur:
-                execute_values(cur, sql_template, values, page_size=page_size)
-            conn.commit()
-            return len(values)
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
-
     # ---- Main entry ----
 
     def run_sync(self, job_code=None, mode=None, target='ALL', company_key=None):
@@ -289,10 +314,21 @@ class SyncService:
             with conn.cursor() as cur:
                 cur.execute("SELECT pg_try_advisory_lock(%s)", (ADVISORY_LOCK_ID,))
                 if not cur.fetchone()[0]:
-                    # El lock está tomado. Verificar si está "atascado" (>5 min) —
+                    # El lock está tomado. Verificar si está "atascado" —
                     # ocurre cuando un sync anterior se cortó sin liberar el lock
-                    # (ej. backend crash, cliente que disparó sync y se desconectó).
-                    # En ese caso, matar la conexión zombi y reintentar.
+                    # (ej. thread muerto sin llegar al finally).
+                    #
+                    # OJO: la conexión que sostiene el lock queda OCIOSA durante
+                    # todo el sync (los handlers abren sus propias conexiones),
+                    # así que su query_start es viejo POR DISEÑO y no distingue
+                    # un sync legítimo largo (STOCK_QUANTS puede tardar >1h) de
+                    # un zombie. Antes solo se miraba query_start > 5 min y eso
+                    # mataba syncs legítimos → quedaban DOS syncs concurrentes.
+                    #
+                    # Criterio nuevo: zombie = lock viejo (>5 min) Y ningún job
+                    # con status RUNNING en sync_run_log. Todo sync real inserta
+                    # una fila RUNNING al arrancar cada job; lock sin RUNNING =
+                    # el proceso que lo tomó ya no está trabajando.
                     cur.execute("""
                         SELECT pl.pid, EXTRACT(EPOCH FROM (NOW() - pa.query_start))::int
                         FROM pg_locks pl
@@ -303,7 +339,9 @@ class SyncService:
                         LIMIT 1
                     """, (ADVISORY_LOCK_ID,))
                     row = cur.fetchone()
-                    if row and row[1] is not None and row[1] > 300:
+                    cur.execute("SELECT EXISTS(SELECT 1 FROM odoo.sync_run_log WHERE status='RUNNING')")
+                    sync_in_progress = cur.fetchone()[0]
+                    if row and row[1] is not None and row[1] > 300 and not sync_in_progress:
                         zombie_pid, age_secs = row[0], row[1]
                         logger.warning(
                             f"Lock zombie detectado: PID {zombie_pid} con lock "
@@ -387,7 +425,8 @@ class SyncService:
                 'STOCK_QUANTS': self._sync_stock_quants,
                 'STOCK_INVENTORY': self._sync_stock_inventory,
                 'STOCK_MOVE': self._sync_stock_move,
-                'POS_ORDERS': self._sync_pos_orders,
+                'POS_ORDERS': (self._sync_pos_orders_v19 if LEE_DEL_19
+                               else self._sync_pos_orders),
                 'AR_CREDIT_INVOICES': self._sync_credit_invoices,
             }
             h = handlers[jc]
@@ -473,6 +512,15 @@ class SyncService:
         uid, pw = self._auth('Ambission')
         domain = self._inc_domain([], cursor, mode)
 
+        # En mode FULL capturamos el timestamp ANTES de empezar para detectar
+        # quants huérfanos al final. Un huérfano = fila local cuyo `synced_at`
+        # quedó atrás del timestamp inicial = no apareció en este FULL = ya no
+        # existe en Odoo. En INCREMENTAL no aplica porque solo trae deltas.
+        from datetime import datetime, timezone
+        sync_start_ts = datetime.now(timezone.utc) if (mode or '').upper() == 'FULL' else None
+        if sync_start_ts:
+            logger.info(f"  stock.quant FULL sync — start_ts={sync_start_ts.isoformat()} (huérfanos previos se borrarán al final)")
+
         # Detect the correct qty field name: try 'qty' first (Odoo 10), then 'quantity' (Odoo 12+)
         qty_field = 'qty'
         has_reserved = False
@@ -546,19 +594,49 @@ class SyncService:
                 break
 
         logger.info(f"  stock.quant sync complete: {total_rows} total rows")
+
+        # En mode FULL: borrar quants huérfanos (los que ya no existen en Odoo
+        # pero quedaron en la copia local porque el INCREMENTAL no captura
+        # deletes). Detectamos por synced_at < sync_start_ts (no se tocaron
+        # durante este FULL, así que no aparecieron en Odoo).
+        if sync_start_ts:
+            conn = self._conn()
+            conn.autocommit = True
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "DELETE FROM odoo.stock_quant "
+                        "WHERE company_key='GLOBAL' AND synced_at < %s",
+                        (sync_start_ts,),
+                    )
+                    deleted = cur.rowcount
+                if deleted > 0:
+                    logger.info(f"  stock.quant cleanup: {deleted} huérfanos eliminados (ya no existen en Odoo)")
+                else:
+                    logger.info(f"  stock.quant cleanup: 0 huérfanos (DB local en sync con Odoo)")
+            except Exception as e:
+                logger.error(f"  stock.quant cleanup ERROR: {e}", exc_info=True)
+            finally:
+                conn.close()
+
         return total_rows, max_w
 
     def _sync_stock_inventory(self, mode, cursor, cs):
-        """Sync stock.inventory desde 2026-04-01 para ambas compañías."""
+        """Sync stock.inventory desde 2026-01-01 para ambas compañías."""
         total = 0
         max_w = cursor
+        # Si una empresa falla, NO avanzamos el cursor: si no, los registros
+        # pendientes de esa empresa quedan saltados para siempre (mismo bug
+        # histórico de POS, versión "cursor compartido dentro de un job").
+        all_companies_ok = True
         for ck in ('Ambission', 'ProyectoModa'):
             try:
                 uid, pw = self._auth(ck)
             except Exception as e:
-                logger.warning(f"stock.inventory skip {ck}: {e}")
+                logger.warning(f"stock.inventory skip {ck}: {e} — cursor NO avanzará")
+                all_companies_ok = False
                 continue
-            base = [('date', '>=', '2026-04-01')]
+            base = [('date', '>=', STOCK_DATE_FROM)]
             domain = self._inc_domain(base, cursor, mode)
             fields = ['id', 'name', 'date', 'state', 'company_id',
                        'x_es_ingreso_produccion', 'location_id',
@@ -583,19 +661,36 @@ class SyncService:
             total += n
             max_w = self._max_wd(recs, max_w)
             logger.info(f"  stock.inventory {ck}: {n} rows")
-        return total, max_w
+        return total, (max_w if all_companies_ok else cursor)
 
     def _sync_stock_move(self, mode, cursor, cs):
-        """Sync stock.move desde 2026-04-01 para ambas compañías."""
+        """Sync stock.move desde 2026-01-01 para ambas compañías."""
         total = 0
         max_w = cursor
+        # Ver nota en _sync_stock_inventory: no avanzar cursor si una empresa falló.
+        all_companies_ok = True
+
+        # Mismo mecanismo que stock.quant: en FULL marcamos el instante de
+        # arranque para poder borrar los huérfanos al final. Un movimiento
+        # BORRADO en Odoo (típico: se arma un borrador de transferencia y se
+        # elimina sin despachar) nunca vuelve a aparecer, y el INCREMENTAL no
+        # tiene forma de enterarse — se queda congelado con su último estado.
+        # Si ese estado era 'assigned', el modo Proyectado del reporte de stock
+        # lo sigue descontando para siempre.
+        #   caso real 2026-08: 18 movimientos de MORTAIN GM209→TALLER borrados
+        #   el 14/08 seguían restando 19 unidades del proyectado de GM209.
+        from datetime import datetime, timezone
+        sync_start_ts = datetime.now(timezone.utc) if (mode or '').upper() == 'FULL' else None
+        if sync_start_ts:
+            logger.info(f"  stock.move FULL sync — start_ts={sync_start_ts.isoformat()} (huérfanos previos se borrarán al final)")
         for ck in ('Ambission', 'ProyectoModa'):
             try:
                 uid, pw = self._auth(ck)
             except Exception as e:
-                logger.warning(f"stock.move skip {ck}: {e}")
+                logger.warning(f"stock.move skip {ck}: {e} — cursor NO avanzará")
+                all_companies_ok = False
                 continue
-            base = [('date', '>=', '2026-04-01 00:00:00')]
+            base = [('date', '>=', STOCK_DATE_FROM + ' 00:00:00')]
             domain = self._inc_domain(base, cursor, mode)
             fields = ['id', 'origin', 'product_id', 'product_tmpl_id',
                        'product_qty', 'company_id', 'date',
@@ -639,31 +734,61 @@ class SyncService:
                     break
             logger.info(f"  stock.move {ck} total: {total}")
 
-        # Detectar movimientos BORRADOS en Odoo. El sync es incremental y un
-        # registro eliminado nunca "cambia": simplemente deja de aparecer, así
-        # que la copia local lo conserva congelado con su último estado. Si ese
-        # estado era 'assigned', el modo Proyectado del reporte de stock lo
-        # sigue descontando para siempre.
-        #   caso real 08/2026: 18 movimientos de MORTAIN GM209→TALLER borrados
-        #   sin despachar restaban 19 unidades del proyectado de esa tienda.
-        self._barrer_pendientes_borrados()
+        # ── Barrido de pendientes: corre SIEMPRE, también en incremental ──
+        # En Odoo un movimiento validado (state='done') NO se puede borrar: es
+        # un asiento de inventario. Solo desaparecen los que están en borrador
+        # o reservados — típicamente al eliminar un picking sin despachar.
+        # Entonces no hace falta releer los ~260k movimientos para detectar
+        # borrados: alcanza con preguntar por los pendientes locales (~660) y
+        # ver cuáles ya no existen. Es una sola llamada y tarda segundos, así
+        # que puede correr en cada sync en vez de esperar al FULL semanal.
+        if all_companies_ok:
+            self._barrer_pendientes_borrados()
 
-        return total, max_w
+        # Limpieza de huérfanos. DOS candados, ambos necesarios:
+        #  1. solo en FULL — el INCREMENTAL trae deltas, así que casi todo
+        #     quedaría "sin tocar" y borraríamos la tabla entera.
+        #  2. solo si las DOS empresas se leyeron bien — si el auth de una
+        #     falló, sus filas no se refrescaron y las estaríamos borrando.
+        # Y el DELETE se acota a date >= STOCK_DATE_FROM porque el FULL solo
+        # pide movimientos desde esa fecha: lo anterior nunca se refresca y
+        # borrarlo sería destruir historia válida.
+        if sync_start_ts and all_companies_ok:
+            conn = self._conn()
+            conn.autocommit = True
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "DELETE FROM odoo.stock_move "
+                        "WHERE date >= %s AND synced_at < %s",
+                        (STOCK_DATE_FROM + ' 00:00:00', sync_start_ts),
+                    )
+                    deleted = cur.rowcount
+                if deleted > 0:
+                    logger.info(f"  stock.move cleanup: {deleted} huérfanos eliminados (ya no existen en Odoo)")
+                else:
+                    logger.info(f"  stock.move cleanup: 0 huérfanos (DB local en sync con Odoo)")
+            except Exception as e:
+                logger.error(f"  stock.move cleanup ERROR: {e}", exc_info=True)
+            finally:
+                conn.close()
+        elif sync_start_ts and not all_companies_ok:
+            logger.warning("  stock.move cleanup OMITIDO: una empresa falló, "
+                           "borrar ahora eliminaría filas válidas no refrescadas")
+
+        return total, (max_w if all_companies_ok else cursor)
 
     def _barrer_pendientes_borrados(self):
-        """Elimina los movimientos PENDIENTES locales que ya no existen en Odoo.
+        """Borra los movimientos PENDIENTES locales que ya no existen en Odoo.
 
-        Barato por diseño. En Odoo un movimiento validado (state='done') NO se
-        puede borrar: es un asiento de inventario. Solo desaparecen los que
-        están en borrador o reservados, que son ~660 de ~270.000 filas. Así que
-        no hace falta releer toda la tabla para detectar borrados: alcanza con
-        preguntar por esos ids concretos y eliminar los que no vuelvan.
+        Barato por diseño: solo mira los que están en un estado borrable
+        (draft/waiting/confirmed/partially_available/assigned). Los 'done' y
+        'cancel' no se pueden eliminar en Odoo, así que no hace falta
+        revisarlos — y son el 99.7% de la tabla.
 
-        Tarda segundos, por eso corre en CADA sync (también incremental) en vez
-        de depender de una lectura completa periódica.
-
-        Solo borra lo que confirmó ausente: si la llamada a Odoo falla, no toca
-        nada. Un fantasma de más es preferible a perder un dato real.
+        Se pregunta a Odoo por esos ids concretos y se borra lo que no vuelva.
+        Solo se elimina lo que se confirmó ausente: si la llamada falla, no se
+        borra nada.
         """
         PEND = ('draft', 'waiting', 'confirmed', 'partially_available', 'assigned')
         try:
@@ -691,6 +816,7 @@ class SyncService:
                 except Exception as e:
                     logger.warning(f"  barrido pendientes: skip {ck} ({e})")
                     continue
+                # Se pregunta en tandas por si la lista crece.
                 vivos = set()
                 for i in range(0, len(ids), 2000):
                     lote = ids[i:i + 2000]
@@ -722,11 +848,14 @@ class SyncService:
         """Sync res.users from all companies (Ambission + ProyectoModa)."""
         total = 0
         max_w = cursor
+        # Ver nota en _sync_stock_inventory: no avanzar cursor si una empresa falló.
+        all_companies_ok = True
         for ck in ('Ambission', 'ProyectoModa'):
             try:
                 uid, pw = self._auth(ck)
             except Exception as e:
-                logger.warning(f"res.users skip {ck}: {e}")
+                logger.warning(f"res.users skip {ck}: {e} — cursor NO avanzará")
+                all_companies_ok = False
                 continue
             domain = self._inc_domain([], cursor, mode)
             recs = self._paginate(uid, pw, 'res.users', domain,
@@ -745,7 +874,7 @@ class SyncService:
             total += n
             max_w = self._max_wd(recs, max_w)
             logger.info(f"  res.users from {ck}: {n} rows")
-        return total, max_w
+        return total, (max_w if all_companies_ok else cursor)
 
     def _sync_res_partner(self, mode, cursor, cs):
         uid, pw = self._auth('Ambission')
@@ -840,9 +969,9 @@ class SyncService:
         base = [('sale_ok','=',True)]
         domain = self._inc_domain(base, cursor, mode)
         ctx_no_active = {'active_test': False}
-        # x_marca is char; x_tipo is many2one; tela/entalle/hilo are many2one
+        # x_marca is char; x_tipo is many2one; tela/entalle/hilo/articulo are many2one
         tmpl_fields = ['id','name','active','sale_ok','purchase_ok','list_price',
-                        'x_marca','x_tipo','tela','entalle','hilo','x_linea_negocio_id',
+                        'x_marca','x_tipo','tela','entalle','hilo','articulo','x_linea_negocio_id',
                         'create_date','create_uid','write_date','write_uid']
         recs = self._paginate(uid, pw, 'product.template', domain, tmpl_fields, cs, ctx=ctx_no_active)
 
@@ -880,11 +1009,16 @@ class SyncService:
             (r['id'], xtxt(r.get('name')), xbool(r.get('active')),
              xbool(r.get('sale_ok')), xbool(r.get('purchase_ok')), xnum(r.get('list_price')),
              xtxt(r.get('x_marca')),
-             _resolve(r.get('x_tipo'), tipo_map),
+             # <campo>         = valor tal cual está en el producto en Odoo
+             # <campo>_resumen = agrupación del catálogo (product.tipo.x_tipo_resumen,
+             #                   product.tela.x_tela, product.entalle.x_entalle)
              xm2o_name(r.get('x_tipo')),
+             _resolve(r.get('x_tipo'), tipo_map),
+             xm2o_name(r.get('tela')),
              _resolve(r.get('tela'), tela_map),
+             xm2o_name(r.get('entalle')),
              _resolve(r.get('entalle'), entalle_map),
-             None,                              # tel: not available
+             xm2o_name(r.get('articulo')),      # product.articulo (many2one)
              xm2o_name(r.get('hilo')),
              xid(r.get('x_linea_negocio_id')),
              xm2o_name(r.get('x_linea_negocio_id')),
@@ -893,31 +1027,53 @@ class SyncService:
             for r in recs
         ]
         sql = """INSERT INTO odoo.product_template (company_key,odoo_id,name,active,sale_ok,purchase_ok,list_price,
-                 marca,tipo,tipo_resumen,tela,entalle,tel,hilo,linea_negocio_id,linea_negocio,odoo_write_date,odoo_create_date,odoo_create_uid,odoo_write_uid,synced_at)
+                 marca,tipo,tipo_resumen,tela,tela_resumen,entalle,entalle_resumen,articulo,hilo,linea_negocio_id,linea_negocio,odoo_write_date,odoo_create_date,odoo_create_uid,odoo_write_uid,synced_at)
                  VALUES %s ON CONFLICT (company_key,odoo_id) DO UPDATE SET
                  name=EXCLUDED.name,active=EXCLUDED.active,sale_ok=EXCLUDED.sale_ok,purchase_ok=EXCLUDED.purchase_ok,
                  list_price=EXCLUDED.list_price,marca=EXCLUDED.marca,tipo=EXCLUDED.tipo,tipo_resumen=EXCLUDED.tipo_resumen,
-                 tela=EXCLUDED.tela,
-                 entalle=EXCLUDED.entalle,tel=EXCLUDED.tel,hilo=EXCLUDED.hilo,
+                 tela=EXCLUDED.tela,tela_resumen=EXCLUDED.tela_resumen,
+                 entalle=EXCLUDED.entalle,entalle_resumen=EXCLUDED.entalle_resumen,articulo=EXCLUDED.articulo,hilo=EXCLUDED.hilo,
                  linea_negocio_id=EXCLUDED.linea_negocio_id,linea_negocio=EXCLUDED.linea_negocio,
                  odoo_write_date=EXCLUDED.odoo_write_date,odoo_create_date=EXCLUDED.odoo_create_date,
                  odoo_create_uid=EXCLUDED.odoo_create_uid,odoo_write_uid=EXCLUDED.odoo_write_uid,synced_at=now()"""
-        tmpl_template = "('GLOBAL',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())"
+        tmpl_template = "('GLOBAL',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())"
         tmpl_rows = self._batch_exec(sql, tmpl_template, vals)
+
+        # La agrupación vive en el catálogo, no en el producto: recalcular siempre
+        # (si no, editar product.tipo/tela/entalle en Odoo nunca se reflejaría).
+        self._refresh_resumen('tipo', tipo_map)
+        self._refresh_resumen('tela', tela_map)
+        self._refresh_resumen('entalle', entalle_map)
         max_w = self._max_wd(recs, cursor)
 
         # B) product.product
         tmpl_ids = [r['id'] for r in recs]
         pp_rows = 0
         rel_rows = 0
-        if tmpl_ids:
+        # Dominio de variantes:
+        # - variantes de templates modificados, Y ADEMÁS
+        # - en INCREMENTAL, variantes modificadas directamente (ej. barcode
+        #   editado) aunque su template no cambió — antes se perdían hasta
+        #   correr un FULL, porque editar la variante no toca el write_date
+        #   del template.
+        cursor_str = cursor.strftime('%Y-%m-%d %H:%M:%S') if cursor else None
+        if tmpl_ids and cursor_str:
+            pp_domain = ['|', ('product_tmpl_id', 'in', tmpl_ids),
+                         ('write_date', '>', cursor_str)]
+        elif tmpl_ids:
+            pp_domain = [('product_tmpl_id', 'in', tmpl_ids)]
+        elif cursor_str:
+            pp_domain = [('write_date', '>', cursor_str)]
+        else:
+            pp_domain = None
+        if pp_domain is not None:
             pp_fields = ['id','product_tmpl_id','barcode','active',
                          'attribute_value_ids','create_date','create_uid','write_date','write_uid']
             try:
-                variants = self._paginate(uid, pw, 'product.product', [('product_tmpl_id','in',tmpl_ids)], pp_fields, cs, ctx=ctx_no_active)
+                variants = self._paginate(uid, pw, 'product.product', pp_domain, pp_fields, cs, ctx=ctx_no_active)
             except Exception:
                 pp_fields.remove('attribute_value_ids')
-                variants = self._paginate(uid, pw, 'product.product', [('product_tmpl_id','in',tmpl_ids)], pp_fields, cs, ctx=ctx_no_active)
+                variants = self._paginate(uid, pw, 'product.product', pp_domain, pp_fields, cs, ctx=ctx_no_active)
 
             pp_vals = [
                 (r['id'], xid(r.get('product_tmpl_id')), xtxt(r.get('barcode')), xbool(r.get('active')),
@@ -1184,7 +1340,7 @@ class SyncService:
             base.append(('company_id', '=', cid))
         domain = self._inc_domain(base, cursor, mode)
 
-        inv_fields = ['id', 'number', 'date_invoice', 'partner_id', 'user_id',
+        inv_fields = ['id', 'number', 'date_invoice', 'date_due', 'partner_id', 'user_id',
                        'company_id', 'state', 'amount_total', 'residual',
                        'payment_term_id', 'currency_id',
                        'create_date', 'create_uid', 'write_date', 'write_uid']
@@ -1210,6 +1366,7 @@ class SyncService:
                 inv_vals = [
                     (ck, r['id'], xtxt(r.get('number')),
                      r.get('date_invoice') if r.get('date_invoice') else None,
+                     r.get('date_due')     if r.get('date_due')     else None,
                      xid(r.get('partner_id')), xid(r.get('user_id')),
                      xid(r.get('company_id')), xtxt(r.get('state')),
                      xnum(r.get('amount_total')), xnum(r.get('residual')),
@@ -1219,12 +1376,13 @@ class SyncService:
                     for r in invoices
                 ]
                 inv_sql = """INSERT INTO odoo.account_invoice_credit
-                    (company_key, odoo_id, number, date_invoice, partner_id, user_id,
+                    (company_key, odoo_id, number, date_invoice, date_due, partner_id, user_id,
                      company_id, state, amount_total, amount_residual,
                      payment_term_id, currency_id,
                      odoo_create_date, odoo_create_uid, odoo_write_date, odoo_write_uid, synced_at)
                     VALUES %s ON CONFLICT (company_key, odoo_id) DO UPDATE SET
                      number=EXCLUDED.number, date_invoice=EXCLUDED.date_invoice,
+                     date_due=EXCLUDED.date_due,
                      partner_id=EXCLUDED.partner_id, user_id=EXCLUDED.user_id,
                      company_id=EXCLUDED.company_id, state=EXCLUDED.state,
                      amount_total=EXCLUDED.amount_total, amount_residual=EXCLUDED.amount_residual,
@@ -1233,7 +1391,7 @@ class SyncService:
                      odoo_write_date=EXCLUDED.odoo_write_date, odoo_write_uid=EXCLUDED.odoo_write_uid,
                      synced_at=now()"""
                 total_inv += self._batch_exec(inv_sql,
-                    "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())", inv_vals)
+                    "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())", inv_vals)
                 max_w = self._max_wd(invoices, max_w)
 
                 # Lines for this batch
@@ -1328,7 +1486,188 @@ class SyncService:
 
         return total_inv + total_lines, max_w
 
+
+    # ══════════════════════════════════════════════════════════════════
+    #  VENTAS · leyendo del ODOO 19
+    #
+    #  A diferencia del camino del Odoo 10, acá NO se piden campos sueltos.
+    #  El Odoo 19 devuelve las filas ya con la forma del espejo y con los ids
+    #  ya traducidos (ver pos_textil_migracion/models/pos_order_espejo.py del
+    #  repo Odoo). Los motivos:
+    #
+    #   · Varios campos que el espejo espera son inventos del Odoo 10 y en el
+    #     19 la información vive en otro lado (la tienda sale de la caja, el
+    #     comprobante de otro campo, los pagos de una lista...). Esa traducción
+    #     conviene tenerla junto a los datos, donde se puede probar y donde no
+    #     se rompe cada vez que Odoo cambia algo.
+    #
+    #   · Los ids se pisan entre sistemas. Traducirlos acá significaría copiar
+    #     y mantener el mapa del otro lado; pedirlos ya traducidos es una sola
+    #     fuente de verdad.
+    #
+    #  El cursor es el ID de la última venta traída (no una fecha): así se
+    #  avanza sin repetir ni saltear aunque dos ventas tengan la misma hora.
+    # ══════════════════════════════════════════════════════════════════
+    def _cliente_19(self):
+        """Conexión al Odoo 19. Falla claro si no está configurada."""
+        if not (ODOO19_URL and ODOO19_DB and ODOO19_USER and ODOO19_PASSWORD):
+            raise RuntimeError(
+                "ODOO_SOURCE_VERSION=19 pero falta la conexión al Odoo 19. "
+                "Definí ODOO19_URL, ODOO19_DB, ODOO19_USER y ODOO19_PASSWORD "
+                "en backend/.env")
+        cli = OdooClient(ODOO19_URL)
+        uid = cli.authenticate(ODOO19_DB, ODOO19_USER, ODOO19_PASSWORD)
+        if not uid:
+            raise RuntimeError(
+                "El Odoo 19 rechazó el usuario %s (revisá ODOO19_USER y "
+                "ODOO19_PASSWORD)" % ODOO19_USER)
+        return cli, uid, ODOO19_PASSWORD
+
+    def _sync_pos_orders_v19(self, ck, mode, cursor, cs):
+        cli, uid, pw = self._cliente_19()
+
+        # El cursor del 19 es un id. En una corrida completa se arranca de cero.
+        try:
+            desde = 0 if mode == 'full' else int(cursor or 0)
+        except (TypeError, ValueError):
+            # Si quedó guardado un cursor del Odoo 10 (una fecha), no sirve acá:
+            # se arranca de cero antes que saltear ventas en silencio.
+            logger.warning("  Cursor %r no es un id: arranco de cero.", cursor)
+            desde = 0
+
+        total_ordenes = total_lineas = 0
+        ultimo = desde
+        vueltas = 0
+
+        while True:
+            vueltas += 1
+            if vueltas > 2000:            # red de seguridad contra bucle infinito
+                logger.error("  Corté por exceso de vueltas (cursor %s)", ultimo)
+                break
+
+            res = cli.execute_kw(
+                ODOO19_DB, uid, pw, 'pos.order', 'textil_exportar_para_espejo',
+                [], {'desde_id': ultimo, 'limite': cs})
+            ordenes = res.get('ordenes') or []
+            lineas = res.get('lineas') or []
+            if not ordenes:
+                break
+
+            o_vals = [
+                (o['company_key'], o['odoo_id'], xtxt(o.get('name')), xdt(o.get('date_order')),
+                 nid(o.get('partner_id')), nid(o.get('user_id')), nid(o.get('vendedor_id')),
+                 xnum(o.get('amount_total')), xnum(o.get('amount_tax')),
+                 xtxt(o.get('state')),
+                 xbool_nullable(o.get('is_cancel')), xbool_nullable(o.get('order_cancel')),
+                 nid(o.get('x_cliente_principal')), xbool_nullable(o.get('reserva')),
+                 nid(o.get('reserva_use_id')),
+                 nid(o.get('location_id')), nid(o.get('company_id')),
+                 xtxt(o.get('tipo_comp')), xtxt(o.get('num_comp')), xtxt(o.get('x_pagos')),
+                 xdt(o.get('odoo_write_date')), xdt(o.get('odoo_create_date')),
+                 None, None)
+                for o in ordenes
+            ]
+            o_sql = """INSERT INTO odoo.pos_order (company_key,odoo_id,name,date_order,partner_id,user_id,vendedor_id,
+                       amount_total,amount_tax,state,is_cancel,order_cancel,
+                       x_cliente_principal,reserva,reserva_use_id,location_id,company_id,
+                       tipo_comp,num_comp,x_pagos,
+                       odoo_write_date,odoo_create_date,odoo_create_uid,odoo_write_uid,synced_at)
+                       VALUES %s ON CONFLICT (company_key,odoo_id) DO UPDATE SET
+                       name=EXCLUDED.name,date_order=EXCLUDED.date_order,
+                       partner_id=EXCLUDED.partner_id,user_id=EXCLUDED.user_id,
+                       vendedor_id=EXCLUDED.vendedor_id,amount_total=EXCLUDED.amount_total,
+                       amount_tax=EXCLUDED.amount_tax,state=EXCLUDED.state,
+                       is_cancel=EXCLUDED.is_cancel,order_cancel=EXCLUDED.order_cancel,
+                       x_cliente_principal=EXCLUDED.x_cliente_principal,
+                       reserva=EXCLUDED.reserva,reserva_use_id=EXCLUDED.reserva_use_id,
+                       location_id=EXCLUDED.location_id,company_id=EXCLUDED.company_id,
+                       tipo_comp=EXCLUDED.tipo_comp,num_comp=EXCLUDED.num_comp,
+                       x_pagos=EXCLUDED.x_pagos,
+                       odoo_write_date=EXCLUDED.odoo_write_date,synced_at=now()"""
+            total_ordenes += self._batch_exec(
+                o_sql, "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())",
+                o_vals)
+
+            if lineas:
+                l_vals = [
+                    (l['company_key'], l['odoo_id'], l['order_id'], nid(l.get('product_id')),
+                     xnum(l.get('qty')), xnum(l.get('price_unit')), xnum(l.get('discount')),
+                     xnum(l.get('price_subtotal')), xnum(l.get('price_subtotal_incl')),
+                     xdt(l.get('odoo_write_date')))
+                    for l in lineas
+                ]
+                l_sql = """INSERT INTO odoo.pos_order_line (company_key,odoo_id,order_id,product_id,qty,price_unit,
+                           discount,price_subtotal,price_subtotal_incl,odoo_write_date,synced_at)
+                           VALUES %s ON CONFLICT (company_key,odoo_id) DO UPDATE SET
+                           order_id=EXCLUDED.order_id,product_id=EXCLUDED.product_id,qty=EXCLUDED.qty,
+                           price_unit=EXCLUDED.price_unit,discount=EXCLUDED.discount,
+                           price_subtotal=EXCLUDED.price_subtotal,
+                           price_subtotal_incl=EXCLUDED.price_subtotal_incl,
+                           odoo_write_date=EXCLUDED.odoo_write_date,synced_at=now()"""
+                total_lineas += self._batch_exec(
+                    l_sql, "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())", l_vals)
+
+            ultimo = res.get('ultimo_id') or ultimo
+            if not res.get('hay_mas'):
+                break
+            time.sleep(0.2)               # sin apurar al servidor
+
+        logger.info("  Odoo 19 · %s ventas y %s líneas (cursor %s)",
+                    total_ordenes, total_lineas, ultimo)
+        # El cursor se guarda como texto, igual que el del Odoo 10.
+        return total_ordenes + total_lineas, str(ultimo)
+
     # ---- Batch exec helper ----
+
+    def _refresh_resumen(self, field, name_map):
+        """Reaplica la agrupación del catálogo a TODOS los productos.
+
+        El sync incremental solo re-trae productos cuyo write_date cambió, pero la
+        agrupación no vive en el producto sino en el catálogo (product.tipo,
+        product.tela, product.entalle). Al editar el catálogo en Odoo, el write_date
+        del producto NO cambia, así que <campo>_resumen se quedaba congelado con el
+        valor viejo. Esto lo recalcula en cada sync.
+        """
+        conn = self._conn()
+        try:
+            with conn.cursor() as cur:
+                if name_map:
+                    args = ','.join(cur.mogrify('(%s,%s)', (k, v)).decode()
+                                    for k, v in name_map.items())
+                    cur.execute(f"""
+                        UPDATE odoo.product_template pt
+                        SET {field}_resumen = COALESCE(m.resumen, pt.{field})
+                        FROM (VALUES {args}) AS m(name, resumen)
+                        WHERE pt.company_key = 'GLOBAL' AND pt.{field} = m.name
+                          AND pt.{field}_resumen IS DISTINCT FROM COALESCE(m.resumen, pt.{field})
+                    """)
+                    changed = cur.rowcount
+                    cur.execute(f"""
+                        UPDATE odoo.product_template pt
+                        SET {field}_resumen = pt.{field}
+                        WHERE pt.company_key = 'GLOBAL' AND pt.{field} IS NOT NULL
+                          AND pt.{field} NOT IN (SELECT name FROM (VALUES {args}) AS m(name, resumen))
+                          AND pt.{field}_resumen IS DISTINCT FROM pt.{field}
+                    """)
+                    changed += cur.rowcount
+                else:
+                    cur.execute(f"""
+                        UPDATE odoo.product_template pt
+                        SET {field}_resumen = pt.{field}
+                        WHERE pt.company_key = 'GLOBAL'
+                          AND pt.{field}_resumen IS DISTINCT FROM pt.{field}
+                    """)
+                    changed = cur.rowcount
+            conn.commit()
+            if changed:
+                logger.info(f"  {field}_resumen recalculado desde catálogo: {changed} filas")
+            return changed
+        except Exception as e:
+            conn.rollback()
+            logger.warning(f"  no se pudo recalcular {field}_resumen: {e}")
+            return 0
+        finally:
+            conn.close()
 
     def _batch_exec(self, sql, template, values, page_size=1000):
         if not values:
