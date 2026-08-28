@@ -18,6 +18,11 @@ POS_JOBS = ['POS_ORDERS']
 MULTI_JOBS = ['AR_CREDIT_INVOICES']
 ADVISORY_LOCK_ID = 777777
 
+# Cuánto puede durar como máximo un sync legítimo antes de considerarlo muerto.
+# STOCK_QUANTS es el más lento y no pasa de ~1h; 3h da margen de sobra y coincide
+# con la ventana que ya usaba el scheduler para saltarse jobs en curso.
+SYNC_MAX_HORAS = 3
+
 # Fecha de corte para stock.move / stock.inventory (antes hardcodeada).
 # Configurable en backend/.env sin tocar código.
 STOCK_DATE_FROM = os.environ.get('ODOO_STOCK_DATE_FROM', '2026-01-01')
@@ -339,7 +344,36 @@ class SyncService:
                         LIMIT 1
                     """, (ADVISORY_LOCK_ID,))
                     row = cur.fetchone()
-                    cur.execute("SELECT EXISTS(SELECT 1 FROM odoo.sync_run_log WHERE status='RUNNING')")
+                    # Antes de nada, cerrar las corridas huérfanas. Una fila
+                    # RUNNING que lleva horas abierta no es un sync vivo: es un
+                    # proceso que se murió o se colgó sin cerrarla. Dejarlas
+                    # abiertas es lo que rompió el sync el 27/08: el proceso se
+                    # colgó llamando a Odoo, dejó su fila en RUNNING, y como el
+                    # EXISTS de abajo NO tenía tope de tiempo, el detector de
+                    # zombies se dio por satisfecho ("hay un sync corriendo") y
+                    # nunca soltó el lock. 40 horas sin datos y sin un solo
+                    # error en el log, porque nadie llegó a fallar.
+                    cur.execute(f"""
+                        UPDATE odoo.sync_run_log
+                           SET status = 'ERROR', ended_at = now(),
+                               error_message = COALESCE(error_message,
+                                   'Corrida huérfana: sin cerrar tras {SYNC_MAX_HORAS}h. '
+                                   'El proceso que la abrió ya no está.')
+                         WHERE status = 'RUNNING'
+                           AND started_at < now() - interval '{SYNC_MAX_HORAS} hours'
+                    """)
+                    if cur.rowcount:
+                        logger.warning(
+                            f"Cerradas {cur.rowcount} corridas huérfanas (>"
+                            f"{SYNC_MAX_HORAS}h en RUNNING) antes de evaluar el lock.")
+
+                    # Ahora sí: ¿hay un sync REALMENTE en curso? Con tope de
+                    # tiempo, para que esto no se pueda volver a atascar.
+                    cur.execute(f"""
+                        SELECT EXISTS(SELECT 1 FROM odoo.sync_run_log
+                                       WHERE status = 'RUNNING'
+                                         AND started_at > now() - interval '{SYNC_MAX_HORAS} hours')
+                    """)
                     sync_in_progress = cur.fetchone()[0]
                     if row and row[1] is not None and row[1] > 300 and not sync_in_progress:
                         zombie_pid, age_secs = row[0], row[1]
